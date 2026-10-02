@@ -30,6 +30,6 @@ class Uq < Formula
   end
 
   test do
-    assert_match "uq 0.1.1", shell_output("#<built-in function bin>/uq --version")
+    assert_match "uq 0.1.1", shell_output("#{bin}/uq --version")
   end
 end

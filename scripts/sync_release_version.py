@@ -46,14 +46,24 @@ def sync_formula(version: str) -> None:
         count=1,
     )
     text = re.sub(
-        r'(?m)^    assert_match "uq .*?", shell_output\("#\{bin\}/uq --version"\)$',
-        f'    assert_match "uq {version}", shell_output("#{bin}/uq --version")',
+        r'(?m)^    assert_match "uq .*?", shell_output\("(?:#\{bin\}|#<built-in function bin>)/uq --version"\)$',
+        f'    assert_match "uq {version}", shell_output("#{{bin}}/uq --version")',
         text,
         count=1,
     )
 
     if text == original:
-        raise RuntimeError("No formula fields were updated. Check Formula/uq.rb format.")
+        replaced = False
+        for pat in (
+            r'(?m)^  version ".*?"$',
+            r'(?m)^    url ".*?uq-v.*?-macos-arm64\.tar\.gz"$',
+            r'(?m)^    assert_match "uq .*?", shell_output\(".*?/uq --version"\)$',
+        ):
+            if re.search(pat, text):
+                replaced = True
+                break
+        if not replaced:
+            raise RuntimeError("No formula fields were updated. Check Formula/uq.rb format.")
 
     FORMULA_PATH.write_text(text, encoding="utf-8")
     print(f"Synced Formula/uq.rb to version {version}")
