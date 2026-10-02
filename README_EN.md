@@ -26,13 +26,24 @@ Automatically strips the `com.apple.quarantine` attribute from downloaded Mac ap
 
 ## One-Line Install & Setup
 
-Install via Homebrew Tap and register the background service:
+### Method 1: One-Line Fast Install (Recommended)
+
+Automatically detects architecture (Apple Silicon / Intel), downloads prebuilt binary, and registers the service:
 
 ```bash
-brew tap yxxbc/uq https://github.com/yxxbc/uq && brew trust yxxbc/uq && brew install uq && uq service install
+curl -fsSL https://raw.githubusercontent.com/yxxbc/uq/master/install.sh | bash
 ```
 
-Once installed, new apps placed into `~/Downloads` or `/Applications` are automatically handled without manual intervention. Prebuilt binaries for Apple Silicon and Intel are also available on [GitHub Releases](https://github.com/yxxbc/uq/releases).
+### Method 2: Via Homebrew Tap
+
+```bash
+brew tap yxxbc/uq https://github.com/yxxbc/uq
+brew trust yxxbc/uq 2>/dev/null || true
+brew install uq
+uq service install
+```
+
+Prebuilt binaries are also available on [GitHub Releases](https://github.com/yxxbc/uq/releases).
 
 ---
 

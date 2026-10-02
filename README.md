@@ -26,13 +26,24 @@ macOS 隔离属性自动解除与后台守护工具
 
 ## 一键安装与启用
 
-通过 Homebrew Tap 安装并注册后台服务：
+### 方式一：一键快速安装（推荐）
+
+自动识别芯片架构（Apple Silicon / Intel），秒级下载预编译包并自动注册后台服务：
 
 ```bash
-brew tap yxxbc/uq https://github.com/yxxbc/uq && brew trust yxxbc/uq && brew install uq && uq service install
+curl -fsSL https://raw.githubusercontent.com/yxxbc/uq/master/install.sh | bash
 ```
 
-安装后无需额外操作，下载目录或应用程序目录有新文件落盘时会自动处理。也可直接在 [GitHub Releases](https://github.com/yxxbc/uq/releases) 下载对应架构（Apple Silicon / Intel）免编译二进制解压使用。
+### 方式二：通过 Homebrew Tap 安装
+
+```bash
+brew tap yxxbc/uq https://github.com/yxxbc/uq
+brew trust yxxbc/uq 2>/dev/null || true
+brew install uq
+uq service install
+```
+
+也可直接在 [GitHub Releases](https://github.com/yxxbc/uq/releases) 下载对应架构免编译二进制使用。
 
 ---
 
