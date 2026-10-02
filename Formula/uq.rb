@@ -6,7 +6,7 @@ class Uq < Formula
 
   if Hardware::CPU.arm?
     url "https://github.com/yxxbc/uq/releases/download/v0.1.4/uq-v0.1.4-macos-arm64.tar.gz"
-    sha256 "d51c81da72ffec38413a92f7d1be12a9155126d0fc15efbc14bc933a5c081ddc"
+    sha256 "45620482a47b849b947ffa32c795932be14eddaec2a4befdc42404d24cdc2e9f"
   else
     odie "uq currently provides prebuilt macOS arm64 binaries. Intel builds are not available in this formula yet."
   end
