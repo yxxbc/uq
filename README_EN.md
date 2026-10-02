@@ -32,7 +32,7 @@ Install via Homebrew Tap and register the background service:
 brew tap yxxbc/uq https://github.com/yxxbc/uq && brew trust yxxbc/uq && brew install uq && uq service install
 ```
 
-Once installed, new apps placed into `~/Downloads` or `/Applications` are automatically handled without manual intervention.
+Once installed, new apps placed into `~/Downloads` or `/Applications` are automatically handled without manual intervention. Prebuilt binaries for Apple Silicon and Intel are also available on [GitHub Releases](https://github.com/yxxbc/uq/releases).
 
 ---
 
