@@ -12,6 +12,23 @@ use walkdir::WalkDir;
 
 const QUARANTINE_ATTR: &str = "com.apple.quarantine";
 const SERVICE_LABEL: &str = "com.user.uq";
+const LOG_PATH: &str = "/tmp/uq.log";
+const ERR_LOG_PATH: &str = "/tmp/uq.err";
+
+fn log_paths() -> (PathBuf, PathBuf) {
+    (PathBuf::from(LOG_PATH), PathBuf::from(ERR_LOG_PATH))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uses_consistent_service_log_paths() {
+        assert_eq!(LOG_PATH, "/tmp/uq.log");
+        assert_eq!(ERR_LOG_PATH, "/tmp/uq.err");
+    }
+}
 
 fn build_cli(msg: &Messages) -> clap::Command {
     use clap::{arg, value_parser, ArgAction};
@@ -361,14 +378,16 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/unquarantine.log</string>
+    <string>{}</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/unquarantine.err</string>
+    <string>{}</string>
 </dict>
 </plist>
 "#,
                     SERVICE_LABEL,
-                    exe_path.display()
+                    exe_path.display(),
+                    LOG_PATH,
+                    ERR_LOG_PATH
                 )
             } else {
                 let mut dir_strings = Vec::new();
@@ -397,16 +416,18 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/unquarantine.log</string>
+    <string>{}</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/unquarantine.err</string>
+    <string>{}</string>
 </dict>
 </plist>
 "#,
                     SERVICE_LABEL,
                     exe_path.display(),
                     tags,
-                    tags
+                    tags,
+                    LOG_PATH,
+                    ERR_LOG_PATH
                 )
             };
 
@@ -440,7 +461,7 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
                         println!("{}", m2);
                     }
                     println!("Service Plist: {}", plist_path.display());
-                    println!("Logs: /tmp/unquarantine.log");
+                    println!("Logs: {}", LOG_PATH);
                 }
                 _ => {
                     let err_msg = match lang {
@@ -497,7 +518,7 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
                     println!("{}", msg2);
                 }
                 println!("Plist: {}", plist_path.display());
-                println!("Logs: /tmp/unquarantine.log");
+                println!("Logs: {}", LOG_PATH);
             } else if plist_path.exists() {
                 let msg = match lang {
                     Lang::Zh => format!("{} 服务配置文件存在但未加载", "[STOPPED]".yellow().bold()),
@@ -517,8 +538,7 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
 }
 
 fn handle_log(sub_m: &clap::ArgMatches, lang: Lang) {
-    let log_path = PathBuf::from("/tmp/unquarantine.log");
-    let err_path = PathBuf::from("/tmp/unquarantine.err");
+    let (log_path, err_path) = log_paths();
 
     if sub_m.get_flag("clear") {
         let _ = fs::write(&log_path, "");
@@ -548,8 +568,8 @@ fn handle_log(sub_m: &clap::ArgMatches, lang: Lang) {
 
     if !log_path.exists() {
         let msg = match lang {
-            Lang::Zh => "暂无日志文件 (/tmp/unquarantine.log 不存在)。",
-            Lang::En => "No log file found (/tmp/unquarantine.log does not exist).",
+            Lang::Zh => format!("暂无日志文件 ({} 不存在)。", LOG_PATH),
+            Lang::En => format!("No log file found ({} does not exist).", LOG_PATH),
         };
         println!("{} {}", "[=]".blue(), msg);
         return;
@@ -574,8 +594,8 @@ fn handle_log(sub_m: &clap::ArgMatches, lang: Lang) {
     };
 
     let header = match lang {
-        Lang::Zh => format!("=== 最近 {} 条服务日志 (/tmp/unquarantine.log) ===", all_lines.len() - start),
-        Lang::En => format!("=== Last {} log entries (/tmp/unquarantine.log) ===", all_lines.len() - start),
+        Lang::Zh => format!("=== 最近 {} 条服务日志 ({}) ===", all_lines.len() - start, LOG_PATH),
+        Lang::En => format!("=== Last {} log entries ({}) ===", all_lines.len() - start, LOG_PATH),
     };
     println!("{}", header.cyan().bold());
     for line in &all_lines[start..] {
@@ -789,7 +809,7 @@ fn show_dashboard(lang: Lang) {
     println!("│  {:<12} {}", format!("{}:", label_mode), mode_text);
     println!("│  {:<12} {}", format!("{}:", label_status), status_text);
     println!("│  {:<12} {}", format!("{}:", label_dirs), watch_dirs.dimmed());
-    println!("│  {:<12} {}", format!("{}:", label_logs), "/tmp/uq.log".dimmed());
+    println!("│  {:<12} {}", format!("{}:", label_logs), LOG_PATH.dimmed());
     println!("├─ {} {}", label_perf.bold(), "─".repeat(40));
     println!("│  {:<12} {}", format!("{}:", label_mem), mem_text);
     println!("│  {:<12} {}", format!("{}:", label_cpu), cpu_text);

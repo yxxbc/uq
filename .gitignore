@@ -1,1 +1,13 @@
-target/
+# Rust build artifacts
+/target/
+
+# Local editor / OS metadata
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Cargo lockfile is usually tracked for libraries, but keeping it optional here
+# if you want to version the lockfile, remove the next line.
+# Cargo.lock
