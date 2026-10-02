@@ -31,6 +31,11 @@ fn build_cli(msg: &Messages) -> clap::Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            arg!(-v --verbose)
+                .help(msg.arg_verbose())
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             arg!(-l --lang <LANG>)
                 .help(msg.arg_lang())
                 .action(ArgAction::Set),
@@ -70,6 +75,27 @@ fn build_cli(msg: &Messages) -> clap::Command {
                 .subcommand(clap::Command::new("status").about(msg.cmd_service_status())),
         )
         .subcommand(
+            clap::Command::new("log")
+                .about(msg.cmd_log())
+                .alias("logs")
+                .arg(
+                    arg!(-f --follow)
+                        .help(msg.arg_log_follow())
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    arg!(-n --lines <NUM>)
+                        .help(msg.arg_log_lines())
+                        .value_parser(value_parser!(usize))
+                        .default_value("20"),
+                )
+                .arg(
+                    arg!(-c --clear)
+                        .help(msg.arg_log_clear())
+                        .action(ArgAction::SetTrue),
+                ),
+        )
+        .subcommand(
             clap::Command::new("lang")
                 .about(msg.cmd_lang())
                 .arg(arg!([LANG]).help(msg.cmd_lang_target())),
@@ -85,7 +111,7 @@ fn remove_quarantine(path: &Path) -> Result<bool, std::io::Error> {
     }
 }
 
-fn process_path(target: &Path, quiet: bool, lang: Lang) -> (usize, usize) {
+fn process_path(target: &Path, quiet: bool, verbose: bool, lang: Lang) -> (usize, usize) {
     let mut total_scanned = 0;
     let mut total_removed = 0;
 
@@ -106,8 +132,23 @@ fn process_path(target: &Path, quiet: bool, lang: Lang) -> (usize, usize) {
         match remove_quarantine(p) {
             Ok(true) => {
                 total_removed += 1;
+                if verbose && !quiet {
+                    let tag = match lang {
+                        Lang::Zh => "[已清除]",
+                        Lang::En => "[STRIPPED]",
+                    };
+                    println!("  {} {}", tag.green().bold(), p.display());
+                }
             }
-            Ok(false) => {}
+            Ok(false) => {
+                if verbose && !quiet {
+                    let tag = match lang {
+                        Lang::Zh => "[未检出]",
+                        Lang::En => "[CLEAN]",
+                    };
+                    println!("  {} {}", tag.dimmed(), p.display());
+                }
+            }
             Err(_) => {}
         }
     }
@@ -251,7 +292,7 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
                                 continue;
                             }
                         }
-                        let (_, removed) = process_path(&path, true, lang);
+                        let (_, removed) = process_path(&path, true, false, lang);
                         if removed > 0 {
                             let msg = match lang {
                                 Lang::Zh => format!(
@@ -474,6 +515,73 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
     }
 }
 
+fn handle_log(sub_m: &clap::ArgMatches, lang: Lang) {
+    let log_path = PathBuf::from("/tmp/unquarantine.log");
+    let err_path = PathBuf::from("/tmp/unquarantine.err");
+
+    if sub_m.get_flag("clear") {
+        let _ = fs::write(&log_path, "");
+        let _ = fs::write(&err_path, "");
+        let msg = match lang {
+            Lang::Zh => format!("{} 后台服务日志已清空。", "[+]".green().bold()),
+            Lang::En => format!("{} Background service log files cleared.", "[+]".green().bold()),
+        };
+        println!("{}", msg);
+        return;
+    }
+
+    if sub_m.get_flag("follow") {
+        if !log_path.exists() {
+            let _ = fs::write(&log_path, "");
+        }
+        let hint = match lang {
+            Lang::Zh => "正在实时追踪后台日志（按 Ctrl+C 退出）:",
+            Lang::En => "Following background log in real-time (Press Ctrl+C to exit):",
+        };
+        println!("{}", hint.cyan().bold());
+        let _ = Command::new("tail").arg("-f").arg(&log_path).status();
+        return;
+    }
+
+    let lines_to_show = *sub_m.get_one::<usize>("lines").unwrap_or(&20);
+
+    if !log_path.exists() {
+        let msg = match lang {
+            Lang::Zh => "暂无日志文件 (/tmp/unquarantine.log 不存在)。",
+            Lang::En => "No log file found (/tmp/unquarantine.log does not exist).",
+        };
+        println!("{} {}", "[=]".blue(), msg);
+        return;
+    }
+
+    let content = fs::read_to_string(&log_path).unwrap_or_default();
+    let all_lines: Vec<&str> = content.lines().collect();
+
+    if all_lines.is_empty() {
+        let msg = match lang {
+            Lang::Zh => "后台日志内容为空。",
+            Lang::En => "Log is empty.",
+        };
+        println!("{} {}", "[=]".blue(), msg);
+        return;
+    }
+
+    let start = if all_lines.len() > lines_to_show {
+        all_lines.len() - lines_to_show
+    } else {
+        0
+    };
+
+    let header = match lang {
+        Lang::Zh => format!("=== 最近 {} 条服务日志 (/tmp/unquarantine.log) ===", all_lines.len() - start),
+        Lang::En => format!("=== Last {} log entries (/tmp/unquarantine.log) ===", all_lines.len() - start),
+    };
+    println!("{}", header.cyan().bold());
+    for line in &all_lines[start..] {
+        println!("{}", line);
+    }
+}
+
 fn handle_lang_command(target_lang: Option<&String>, current_lang: Lang) {
     if let Some(target) = target_lang {
         if let Some(new_lang) = Lang::from_str(target) {
@@ -524,6 +632,7 @@ fn main() {
     let matches = app.get_matches();
 
     let quiet = matches.get_flag("quiet");
+    let verbose = matches.get_flag("verbose");
 
     // 3. Dispatch subcommands
     match matches.subcommand() {
@@ -540,6 +649,9 @@ fn main() {
         }
         Some(("service", sub_m)) => {
             handle_service(sub_m, active_lang);
+        }
+        Some(("log", sub_m)) => {
+            handle_log(sub_m, active_lang);
         }
         Some(("lang", sub_m)) => {
             let target = sub_m.get_one::<String>("LANG");
@@ -563,7 +675,7 @@ fn main() {
             let mut total_s = 0;
             let mut total_r = 0;
             for p in &paths {
-                let (s, r) = process_path(p, quiet, active_lang);
+                let (s, r) = process_path(p, quiet, verbose, active_lang);
                 total_s += s;
                 total_r += r;
             }

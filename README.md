@@ -89,7 +89,33 @@ unquarantine service status
 unquarantine service uninstall
 ```
 
-### 5. 语言切换与国际化 (i18n)
+### 5. 查看后台服务日志
+
+后台服务（不管是零内存 WatchPaths 还是守护进程模式）的执行情况均可直接查看：
+
+```bash
+# 查看最近 20 条日志
+unquarantine log
+
+# 指定查看最近 50 条日志
+unquarantine log -n 50
+
+# 类似 tail -f 实时滚动查看日志
+unquarantine log -f
+
+# 清空历史日志
+unquarantine log -c
+```
+
+### 6. 常用参数与标志
+
+- `-v, --verbose`：显示每一个被扫描与清除的具体文件路径
+- `-q, --quiet`：静默模式，只在出错时输出
+- `-V, --version`：查看当前版本号
+- `-h, --help`：查看命令行帮助信息
+- `-l, --lang <zh|en>`：临时指定运行语言
+
+### 7. 语言切换与持久化配置 (i18n)
 
 支持中英文双语帮助文档和运行时提示，自动跟随系统语言：
 
@@ -104,14 +130,6 @@ unquarantine lang zh
 # 单次命令临时指定语言查看帮助
 unquarantine -l en --help
 unquarantine -l zh --help
-```
-
-### 6. 查看版本号
-
-```bash
-unquarantine -V
-# 或
-unquarantine --version
 ```
 
 ---

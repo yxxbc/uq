@@ -142,6 +142,13 @@ impl Messages {
         }
     }
 
+    pub fn arg_verbose(&self) -> &'static str {
+        match self.lang {
+            Lang::Zh => "显示详细扫描与清除日志",
+            Lang::En => "Show verbose scanning and removal output",
+        }
+    }
+
     pub fn cmd_service_daemon(&self) -> &'static str {
         match self.lang {
             Lang::Zh => "以持续长驻守护进程运行（watch 模式），而不是零内存事件唤醒模式",
@@ -176,4 +183,33 @@ impl Messages {
             Lang::En => "Target language to set (zh/en). Leave empty to display current language",
         }
     }
+
+    pub fn cmd_log(&self) -> &'static str {
+        match self.lang {
+            Lang::Zh => "查看或管理后台服务的运行日志",
+            Lang::En => "View or manage background service logs",
+        }
+    }
+
+    pub fn arg_log_follow(&self) -> &'static str {
+        match self.lang {
+            Lang::Zh => "实时滚动追踪日志输出 (类似 tail -f)",
+            Lang::En => "Follow log output in real time (like tail -f)",
+        }
+    }
+
+    pub fn arg_log_lines(&self) -> &'static str {
+        match self.lang {
+            Lang::Zh => "展示的日志行数 (默认: 20)",
+            Lang::En => "Number of lines to show (default: 20)",
+        }
+    }
+
+    pub fn arg_log_clear(&self) -> &'static str {
+        match self.lang {
+            Lang::Zh => "清空所有后台日志记录",
+            Lang::En => "Clear all service log files",
+        }
+    }
 }
+
