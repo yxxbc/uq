@@ -1,12 +1,10 @@
 <div align="center">
 
-<img src="./assets/logo.svg" alt="UQ Logo" width="130" height="130" />
+<img src="./assets/logo.svg" alt="UQ Logo" width="120" height="120" />
 
 # uq (Unquarantine)
 
-**⚡️ Lightning-fast macOS quarantine remover & zero-memory background watcher**
-
-Say goodbye to "App is damaged and cannot be opened" and "Apple cannot verify this app" errors on macOS.
+macOS Quarantine Remover & Background Watcher
 
 [![macOS](https://img.shields.io/badge/Platform-macOS%2010.15+-blue?logo=apple&style=flat-square)](https://apple.com)
 [![Rust](https://img.shields.io/badge/Language-Rust%202024-orange?logo=rust&style=flat-square)](https://www.rust-lang.org)
@@ -20,60 +18,102 @@ Say goodbye to "App is damaged and cannot be opened" and "Apple cannot verify th
 
 ---
 
-## 🚀 One-Line Installation & Auto-Service (Recommended)
+## Why uq?
 
-Install via Homebrew Tap and register the zero-memory background service in one go:
+Automatically strips the `com.apple.quarantine` attribute from downloaded Mac apps to resolve "App is damaged" and "Cannot verify developer" warnings without manual terminal commands.
+
+---
+
+## One-Line Install & Setup
+
+Install via Homebrew Tap and register the background service:
 
 ```bash
 brew tap yxxbc/uq https://github.com/yxxbc/uq && brew install uq && uq service install
 ```
 
-> **Done!** `uq` will monitor `~/Downloads` and `/Applications` using native macOS `WatchPaths`.
-> It consumes **0 MB memory and 0% CPU** while idle, waking up only when new files arrive to instantly strip quarantine attributes.
+Once installed, new apps placed into `~/Downloads` or `/Applications` are automatically handled without manual intervention.
 
 ---
 
-## ✨ Features
+## Comparison
 
-- ⚡️ **Lightweight & Fast**: Pure Rust system calls, optimized with LTO and strip down to **~500 KB**.
-- 🍃 **Zero Idle Footprint**: Event-driven launchd integration without persistent background memory usage.
-- 🔍 **Quarantine Inspection**: Easily check quarantine tags and origin metadata with `uq check`.
-- 📜 **Built-in Logging**: Trace auto-clean events easily with `uq log` (supports `-f` follow and `-c` clear).
-- 🌐 **Native Bilingual i18n**: Out-of-the-box Chinese and English support with CLI language persistence.
+| Approach | uq (This Project) | Disable Gatekeeper (`spctl --master-disable`) | Manual `xattr -cr` |
+| :--- | :--- | :--- | :--- |
+| **Automation** | **Fully automated**, strips attributes immediately upon file arrival | **Global bypass**, disables checks entirely | **Manual**, requires terminal command on every error |
+| **System Security** | **High**, only strips quarantine from targets, keeps system protection intact | **Very Low**, turns off global security safeguards | **High**, affects target path only |
+| **Ease of Use** | **Zero effort**, runs silently in background after setup | **Moderate**, requires root password and policy override | **Low**, requires terminal proficiency and copy-pasting paths |
+| **Stability** | **Persistent**, based on macOS launchd, survives system upgrades | **Poor**, often re-enabled by macOS major system updates | **Persistent**, but must be manually repeated every time |
+| **Symlink Safety** | **Safe**, avoids symlink traversal | **None** | **Risk**, recursive `xattr` can follow symlinks unexpectedly |
 
 ---
 
-## 🛠️ Command Cheat Sheet
+## Performance & Resource Footprint
+
+Written in pure Rust and driven by macOS launchd system events:
+
+- **Idle Overhead**: **0 Processes / 0 MB Memory / 0% CPU**. Powered by native macOS `WatchPaths`, requiring no persistent daemon in the background.
+- **Active Overhead**: Briefly awakened upon file writes. Processing finishes in **10–30 ms** with peak transient memory around **7 MB**, immediately terminating upon completion to free all resources.
+- **Binary Size**: Optimized with LTO and Strip down to **~513 KB**.
+
+---
+
+## Commands
+
+Running `uq` without arguments displays service status and performance metrics:
 
 ```bash
-# Strip quarantine attributes manually
+# Display dashboard and service status
+uq
+
+# Manually strip quarantine from a file or application
 uq /Applications/SomeApp.app
 
-# Check quarantine status
+# Check quarantine attributes and origin metadata
 uq check /Applications/SomeApp.app
+
+# Live stream service logs
+uq log -f
+
+# View last 20 log entries
+uq log
+
+# Clear service logs
+uq log -c
 
 # Service management
 uq service status
-uq service install
 uq service uninstall
+uq service install
 
-# Logs
-uq log
-uq log -f
-
-# Language switching
+# Language switching (zh/en, automatically detects system locale by default)
 uq lang en
 uq lang zh
+
+# View full command help
+uq --help
 ```
 
 ---
 
-## 🤝 Friends & Community
+## Manual Build
 
-- [LINUX DO](https://linux.do) - *A vibrant, friendly and geeky tech community.*
+```bash
+git clone https://github.com/yxxbc/uq.git
+cd uq
+cargo build --release
+sudo cp target/release/uq /usr/local/bin/
+uq service install
+```
 
 ---
 
-## 📄 License
+## Friends
+
+- [LINUX DO](https://linux.do) - *A sincere, friendly, geeky tech and digital lifestyle community.*
+
+---
+
+## License
 
 MIT License © yxxbc

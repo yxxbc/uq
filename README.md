@@ -1,12 +1,10 @@
 <div align="center">
 
-<img src="./assets/logo.svg" alt="UQ Logo" width="130" height="130" />
+<img src="./assets/logo.svg" alt="UQ Logo" width="120" height="120" />
 
 # uq (Unquarantine)
 
-**⚡️ 极速、开箱即用的 macOS 隔离属性自动解除与后台静默守护工具**
-
-告别「应用已损坏，无法打开」与「Apple 无法验证恶意软件」烦恼，一键解放你的 Mac 应用。
+macOS 隔离属性自动解除与后台守护工具
 
 [![macOS](https://img.shields.io/badge/Platform-macOS%2010.15+-blue?logo=apple&style=flat-square)](https://apple.com)
 [![Rust](https://img.shields.io/badge/Language-Rust%202024-orange?logo=rust&style=flat-square)](https://www.rust-lang.org)
@@ -20,104 +18,87 @@
 
 ---
 
-## 💡 为什么需要 uq？
+## 为什么需要 uq
 
-在 macOS 上，从浏览器、微信、Telegram 或第三方网盘下载的应用与工具包，系统都会强制打上 `com.apple.quarantine`（隔离属性）。
-当该应用未通过苹果官方公证收费签名时，macOS Gatekeeper 就会弹出：
-- *「无法打开，因为 Apple 无法验证其是否包含恶意软件」*
-- *「“XXX.app” 已损坏，你应该将它移到废纸篓」*
-
-**`uq` 为此而生**：它是一个采用 Rust 深度调优的极轻量系统工具，既能在终端秒级解除任何 `.app` 的隔离封锁，更能作为后台服务**静默自动运行**——只要下载了新文件，就会被自动解锁，全程 0 内存占用、0 感知。
+自动解除网络下载应用携带的 `com.apple.quarantine` 隔离属性，解决「应用已损坏」与「无法验证恶意软件」弹窗，免去每次手动打开终端敲命令的麻烦。
 
 ---
 
-## 🚀 极速一键安装与自启（推荐）
+## 一键安装与启用
 
-通过 Homebrew 专属 Tap 一键安装并注册开机自启服务：
+通过 Homebrew Tap 安装并注册后台服务：
 
 ```bash
 brew tap yxxbc/uq https://github.com/yxxbc/uq && brew install uq && uq service install
 ```
 
-> **搞定！** 执行完毕后，`uq` 就会常驻于系统后台。
-> 基于 macOS 原生 `WatchPaths` 机制，平时完全是 **0 MB 内存、0% CPU**。只要 `~/Downloads` 或 `/Applications` 进了新应用，就会在毫秒内自动抹除隔离属性。
+安装后无需额外操作，下载目录或应用程序目录有新文件落盘时会自动处理。
 
 ---
 
-## ✨ 核心特性
+## 方案对比
 
-- ⚡️ **单二进制极简极致**：采用 Rust 原生系统调用与 LTO / Strip 极限瘦身，编译体积仅约 **500 KB**。
-- 🍃 **零内存空闲常驻**：无需在后台长驻消耗内存的进程，利用系统 `launchd` 事件机制按需唤醒，用完即退。
-- 🔍 **状态随时检查**：随时检查目标应用是否被 Gatekeeper 拦截并查看来源元数据。
-- 📜 **完整日志可溯源**：支持 `uq log` 实时滚动查看后台解锁历史与追踪。
-- 🌐 **双语 i18n 支持**：自带中文与英文双语界面，既能自动匹配系统语言，也可以命令行随意切换保存。
+| 对比维度 | uq (本项目) | 关闭 Gatekeeper (`spctl --master-disable`) | 手动执行 `xattr -cr` |
+| :--- | :--- | :--- | :--- |
+| **自动化程度** | **完全自动**，检测到新应用落地秒级解除 | **完全放开**，全局不校验 | **纯手动**，每次报错都要进终端处理 |
+| **系统安全性** | **高**，仅移除文件的隔离属性，保留系统防护 | **极低**，彻底关闭全局安全防线，任意脚本可静默运行 | **高**，仅针对指定路径生效 |
+| **使用门槛** | **零门槛**，一次配置后后台无感运行 | **中**，需要关闭系统安全策略并输入管理员密码 | **高**，需理解终端命令，手动复制文件路径 |
+| **长期稳定性** | **稳定**，基于系统 launchd 机制，不受大版本更新影响 | **差**，macOS 系统更新常会自动恢复全局防御 | **稳定**，但每次遇到弹窗都要重复一遍 |
+| **安全性防护** | **有**，自带软链接防越界，递归只处理真实文件 | **无**，完全不设防 | **低**，错误使用 `-r` 可能影响符号链接目标 |
 
 ---
 
-## 🛠️ 常用命令速查
+## 性能损耗与开销
 
-`uq` 命名短至两个字符，敲起来顺手流畅：
+本工具使用 Rust 编写，通过 launchd 系统事件驱动：
 
-### 1. 手动清除隔离（直接拖拽应用）
+- **空闲常驻消耗**：**0 进程 / 0 MB 内存 / 0% CPU**。采用 macOS 原生 `WatchPaths` 机制，平时不运行后台守护进程。
+- **触发运行时**：仅在新文件写入完成时由系统短暂唤醒，处理耗时通常在 **10~30 毫秒** 之间，瞬时内存占用约 **7 MB**，处理完毕后进程立即退出并释放全部资源。
+- **程序体积**：编译启用 LTO 与 Strip 优化，二进制大小约 **513 KB**。
+
+---
+
+## 常用命令
+
+直接运行 `uq` 会显示当前服务状态与资源监控卡片：
 
 ```bash
-# 解决单个无法打开的应用
+# 查看服务状态与性能仪表盘
+uq
+
+# 手动清除指定应用或文件的隔离属性
 uq /Applications/SomeApp.app
 
-# 同时批量解除多个路径
-uq ~/Downloads/*.zip /Applications/*.app
-
-# 详细输出每一个被处理的子文件
-uq -v /Applications/SomeApp.app
-
-# 静默处理
-uq -q /Applications/SomeApp.app
-```
-
-### 2. 检查应用是否被隔离
-
-```bash
+# 检查目标是否携带隔离属性及来源信息
 uq check /Applications/SomeApp.app
-```
 
-### 3. 查看后台服务与日志
-
-```bash
-# 查看服务运行状态
-uq service status
-
-# 查看最近 20 条自动解锁日志
-uq log
-
-# 类似 tail -f 实时追踪日志变动
+# 实时查看后台自动解除日志
 uq log -f
 
-# 清空历史日志
+# 查看最近 20 条日志
+uq log
+
+# 清空日志记录
 uq log -c
 
-# 卸载后台服务
-uq service uninstall
-```
+# 服务管理
+uq service status      # 查看服务状态
+uq service uninstall   # 卸载后台服务
+uq service install     # 重新安装服务
 
-### 4. 国际化与语言设置
-
-```bash
-# 查看当前语言设置
-uq lang
-
-# 永久切换为英文 / 中文
-uq lang en
+# 切换语言 (支持中/英双语，默认自动跟随系统)
 uq lang zh
+uq lang en
 
-# 单次命令临时指定语言
-uq -l en --help
+# 查看完整命令行帮助
+uq --help
 ```
 
 ---
 
-## 📦 手动构建安装
+## 手动编译安装
 
-如果你未安装 Homebrew，也可直接通过 Rust 工具链构建：
+如不使用 Homebrew，可从源码构建：
 
 ```bash
 git clone https://github.com/yxxbc/uq.git
@@ -129,12 +110,12 @@ uq service install
 
 ---
 
-## 🤝 友情链接
+## 友情链接
 
-- [LINUX DO 社区](https://linux.do) - *真诚、友善、团结、专业，探讨技术与数字生活的优质社区。*
+- [LINUX DO](https://linux.do) - *真诚、友善、团结、专业，探讨技术与数字生活的优质社区。*
 
 ---
 
-## 📄 开源许可证
+## 开源许可证
 
-本项目基于 [MIT 许可证](./LICENSE) 开源。欢迎 Star 与 PR！
+本项目基于 [MIT 许可证](./LICENSE) 开源。
