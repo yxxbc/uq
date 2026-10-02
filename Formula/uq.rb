@@ -6,7 +6,7 @@ class Uq < Formula
 
   if Hardware::CPU.arm?
     url "https://github.com/yxxbc/uq/releases/download/v0.1.0/uq-v0.1.0-macos-arm64.tar.gz"
-    sha256 "703564637d52d5711bc070b51cf7925e0eb007e0f2f4514ba4d3cb6bc312cfa0"
+    sha256 "703564637d52d5711bc070b51cf7ec8fb788762d462ff7dfcbb7d9cd3b6bba18"
   else
     url "https://github.com/yxxbc/uq.git", branch: "master"
     depends_on "rust" => :build
