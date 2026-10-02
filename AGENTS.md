@@ -26,7 +26,7 @@ This repository ships a small Rust CLI named `uq` for macOS. It removes the `com
 - Keep `Formula/uq.rb` version and hash aligned with the GitHub release asset.
 - Keep the `release.yml` workflow asset naming aligned with the formula and tag naming.
 - Add a changelog section for each release under `## [x.y.z]`.
-- Ensure the GitHub release body is generated from `CHANGELOG.md` automatically.
+- The GitHub release body must be generated directly from `CHANGELOG.md`; do not maintain a separate release-note markdown file as the source of truth.
 
 ## Notes for future agents
 

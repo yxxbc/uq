@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-10-02
+
+### Fixed
+- Corrected the release-note source of truth to `CHANGELOG.md` instead of a duplicated `RELEASE_NOTES.md` file.
+- Corrected the release versioning flow so `Cargo.toml`, tag, and Homebrew formula stay aligned on the same release.
+- Fixed the CI sync script so Ruby interpolation in the formula is preserved correctly during automatic updates.
+
+### Changed
+- Release notes are now generated directly from the changelog section for the corresponding tag.
+- GitHub release bodies no longer rely on a manually maintained markdown file.
+
 ## [0.1.1] - 2026-10-02
 
 ### Added
