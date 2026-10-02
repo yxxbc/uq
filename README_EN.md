@@ -76,4 +76,4 @@ uq lang zh
 
 ## 📄 License
 
-MIT License © Shorin & Miyu
+MIT License © yxxbc

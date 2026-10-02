@@ -19,7 +19,7 @@ fn build_cli(msg: &Messages) -> clap::Command {
     clap::Command::new("uq")
         .alias("unquarantine")
         .version(env!("CARGO_PKG_VERSION"))
-        .author("Shorin & Miyu")
+        .author("yxxbc")
         .about(msg.about())
         .arg(
             arg!([PATH] ... "paths")
