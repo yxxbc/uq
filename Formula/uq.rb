@@ -1,16 +1,24 @@
 class Uq < Formula
   desc "Lightning-fast macOS quarantine remover & background watcher"
   homepage "https://github.com/yxxbc/uq"
-  url "https://github.com/yxxbc/uq/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "bc468c1919c01a1e52e83613eaeaea0de2f3ddd5bf14798fa2bf68d9af3e5cf1"
+  version "0.1.1"
   license "MIT"
 
-  head "https://github.com/yxxbc/uq.git", branch: "master"
-
-  depends_on "rust" => :build
+  if Hardware::CPU.arm?
+    url "https://github.com/yxxbc/uq/releases/download/v0.1.1/uq-v0.1.1-macos-arm64.tar.gz"
+    sha256 "8e228d09995d5a6dbcddcab58b3f0935b5405f74b38669e4ff5e29440cc7f0ec"
+  else
+    odie "uq currently provides prebuilt macOS arm64 binaries. Intel builds are not available in this formula yet."
+  end
 
   def install
-    system "cargo", "install", *std_cargo_args
+    bin.install "uq"
+  end
+
+  def uninstall
+    if (bin / "uq").exist?
+      system "#{bin}/uq", "service", "uninstall"
+    end
   end
 
   def caveats
@@ -22,6 +30,6 @@ class Uq < Formula
   end
 
   test do
-    assert_match "uq 0.1.0", shell_output("#{bin}/uq --version")
+    assert_match "uq 0.1.1", shell_output("#<built-in function bin>/uq --version")
   end
 end
