@@ -1,0 +1,13 @@
+[package]
+name = "unquarantine"
+version = "0.1.0"
+edition = "2024"
+description = "macOS CLI tool to inspect, remove, and automatically watch com.apple.quarantine attributes"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+xattr = "1.4"
+walkdir = "2.5"
+notify = "8.0"
+colored = "2.1"
+dirs = "5.0"
