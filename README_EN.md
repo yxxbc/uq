@@ -29,7 +29,7 @@ Automatically strips the `com.apple.quarantine` attribute from downloaded Mac ap
 Install via Homebrew Tap and register the background service:
 
 ```bash
-brew tap yxxbc/uq https://github.com/yxxbc/uq && brew install uq && uq service install
+brew tap yxxbc/uq https://github.com/yxxbc/uq && brew trust yxxbc/uq && brew install uq && uq service install
 ```
 
 Once installed, new apps placed into `~/Downloads` or `/Applications` are automatically handled without manual intervention.

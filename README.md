@@ -29,7 +29,7 @@ macOS 隔离属性自动解除与后台守护工具
 通过 Homebrew Tap 安装并注册后台服务：
 
 ```bash
-brew tap yxxbc/uq https://github.com/yxxbc/uq && brew install uq && uq service install
+brew tap yxxbc/uq https://github.com/yxxbc/uq && brew trust yxxbc/uq && brew install uq && uq service install
 ```
 
 安装后无需额外操作，下载目录或应用程序目录有新文件落盘时会自动处理。
