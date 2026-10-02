@@ -11,12 +11,13 @@ use std::time::Duration;
 use walkdir::WalkDir;
 
 const QUARANTINE_ATTR: &str = "com.apple.quarantine";
-const SERVICE_LABEL: &str = "com.user.unquarantine";
+const SERVICE_LABEL: &str = "com.user.uq";
 
 fn build_cli(msg: &Messages) -> clap::Command {
     use clap::{arg, value_parser, ArgAction};
 
-    clap::Command::new("unquarantine")
+    clap::Command::new("uq")
+        .alias("unquarantine")
         .version(env!("CARGO_PKG_VERSION"))
         .author("Shorin & Miyu")
         .about(msg.about())
@@ -665,8 +666,8 @@ fn main() {
 
             if paths.is_empty() {
                 let err_msg = match active_lang {
-                    Lang::Zh => "未指定路径。请运行 `unquarantine --help` 查看使用说明。",
-                    Lang::En => "No paths specified. Run `unquarantine --help` for usage.",
+                    Lang::Zh => "未指定路径。请运行 `uq --help` 查看使用说明。",
+                    Lang::En => "No paths specified. Run `uq --help` for usage.",
                 };
                 eprintln!("{} {}", "[-]".yellow(), err_msg);
                 std::process::exit(1);

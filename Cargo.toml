@@ -1,8 +1,12 @@
 [package]
-name = "unquarantine"
+name = "uq"
 version = "0.1.0"
 edition = "2024"
-description = "macOS CLI tool to inspect, remove, and automatically watch com.apple.quarantine attributes"
+description = "Lightning-fast macOS quarantine remover & background watcher"
+
+[[bin]]
+name = "uq"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
