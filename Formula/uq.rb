@@ -1,12 +1,12 @@
 class Uq < Formula
   desc "Lightning-fast macOS quarantine remover & background watcher"
   homepage "https://github.com/yxxbc/uq"
-  version "0.1.3"
+  version "0.1.4"
   license "MIT"
 
   if Hardware::CPU.arm?
-    url "https://github.com/yxxbc/uq/releases/download/v0.1.3/uq-v0.1.3-macos-arm64.tar.gz"
-    sha256 "8e228d09995d5a6dbcddcab58b3f0935b5405f74b38669e4ff5e29440cc7f0ec"
+    url "https://github.com/yxxbc/uq/releases/download/v0.1.4/uq-v0.1.4-macos-arm64.tar.gz"
+    sha256 "d51c81da72ffec38413a92f7d1be12a9155126d0fc15efbc14bc933a5c081ddc"
   else
     odie "uq currently provides prebuilt macOS arm64 binaries. Intel builds are not available in this formula yet."
   end
@@ -30,6 +30,6 @@ class Uq < Formula
   end
 
   test do
-    assert_match "uq 0.1.3", shell_output("#{bin}/uq --version")
+    assert_match "uq 0.1.4", shell_output("#{bin}/uq --version")
   end
 end

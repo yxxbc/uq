@@ -66,7 +66,12 @@ jobs:
 
           TAG_NAME="${{ github.ref_name }}"
           if [[ -z "$TAG_NAME" || "$TAG_NAME" != v* ]]; then
-            TAG_NAME="v0.1.0"
+            TAG_NAME="v$(python3 - <<'PY'
+import tomllib
+with open('Cargo.toml', 'rb') as fh:
+    print(tomllib.load(fh)['package']['version'])
+PY
+)"
           fi
 
           ARCHIVE_NAME="uq-${TAG_NAME}-macos-${{ matrix.arch_name }}.tar.gz"
@@ -81,7 +86,12 @@ jobs:
 
           TAG_NAME="${{ github.ref_name }}"
           if [[ -z "$TAG_NAME" || "$TAG_NAME" != v* ]]; then
-            TAG_NAME="v0.1.0"
+            TAG_NAME="v$(python3 - <<'PY'
+import tomllib
+with open('Cargo.toml', 'rb') as fh:
+    print(tomllib.load(fh)['package']['version'])
+PY
+)"
           fi
 
           if [[ ! -f CHANGELOG.md ]]; then
@@ -94,11 +104,18 @@ jobs:
           from pathlib import Path
 
           tag = sys.argv[1]
+          version = tag[1:] if tag.startswith('v') else tag
           text = Path('CHANGELOG.md').read_text(encoding='utf-8')
           sections = re.split(r'(?m)^## ', text)
           target = None
           for part in sections[1:]:
-              if part.startswith(f'[{tag}]') or part.startswith(f'{tag}'):
+              normalized = part.lstrip()
+              if (
+                  normalized.startswith(f'[{version}]') or
+                  normalized.startswith(f'[{tag}]') or
+                  normalized.startswith(f'{version}') or
+                  normalized.startswith(f'{tag}')
+              ):
                   target = part
                   break
           if target is None:

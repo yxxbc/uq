@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-10-02
+
+### Fixed
+- Fixed the release workflow fallback tag bug that still defaulted to `v0.1.0` during manual or invalid tag runs.
+- Corrected the release process so generated GitHub release bodies and archive names are based on the actual version in `Cargo.toml`.
+- Ensured the release metadata stays aligned across the Homebrew formula and published tag metadata.
+
+### Changed
+- Re-published the corrected release flow under a new patch version after the earlier incorrect v0.1.3 publication.
+
 ## [0.1.3] - 2026-10-02
 
 ### Fixed
