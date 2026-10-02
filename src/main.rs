@@ -52,8 +52,12 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ServiceAction {
-    /// Install and start launchd background agent
-    Install,
+    /// Install and register launchd agent (defaults to 0-memory WatchPaths event mode)
+    Install {
+        /// Run as a persistent background daemon (watch mode) instead of zero-memory WatchPaths event trigger
+        #[arg(short, long)]
+        daemon: bool,
+    },
     /// Stop and remove launchd background agent
     Uninstall,
     /// Check background agent status
@@ -236,13 +240,15 @@ fn handle_service(action: ServiceAction) {
     let plist_path = get_plist_path();
 
     match action {
-        ServiceAction::Install => {
+        ServiceAction::Install { daemon } => {
             let exe_path = get_current_exe();
             let parent_dir = plist_path.parent().unwrap();
             fs::create_dir_all(parent_dir).expect("Failed to create LaunchAgents directory");
 
-            let plist_content = format!(
-                r#"<?xml version="1.0" encoding="UTF-8"?>
+            let watch_dirs = default_watch_dirs();
+            let plist_content = if daemon {
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -264,9 +270,48 @@ fn handle_service(action: ServiceAction) {
 </dict>
 </plist>
 "#,
-                SERVICE_LABEL,
-                exe_path.display()
-            );
+                    SERVICE_LABEL,
+                    exe_path.display()
+                )
+            } else {
+                let mut dir_strings = Vec::new();
+                for d in &watch_dirs {
+                    dir_strings.push(format!("        <string>{}</string>", d.display()));
+                }
+                let tags = dir_strings.join("\n");
+
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+        <string>-q</string>
+{}
+    </array>
+    <key>WatchPaths</key>
+    <array>
+{}
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/unquarantine.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/unquarantine.err</string>
+</dict>
+</plist>
+"#,
+                    SERVICE_LABEL,
+                    exe_path.display(),
+                    tags,
+                    tags
+                )
+            };
 
             fs::write(&plist_path, plist_content).expect("Failed to write plist file");
             let _ = Command::new("launchctl").arg("unload").arg(&plist_path).output();
@@ -275,9 +320,15 @@ fn handle_service(action: ServiceAction) {
             match status {
                 Ok(s) if s.success() => {
                     println!(
-                        "{} Background agent installed and started successfully!",
+                        "{} Launchd agent installed successfully!",
                         "[+]".green().bold()
                     );
+                    if daemon {
+                        println!("Mode: Persistent Daemon (watch mode)");
+                    } else {
+                        println!("Mode: Zero-Memory Event Trigger (WatchPaths)");
+                        println!("Idle Footprint: 0 MB memory, 0% CPU");
+                    }
                     println!("Service Plist: {}", plist_path.display());
                     println!("Logs: /tmp/unquarantine.log");
                 }
@@ -302,11 +353,19 @@ fn handle_service(action: ServiceAction) {
                 .expect("Failed to execute launchctl");
             let list = String::from_utf8_lossy(&output.stdout);
             if list.contains(SERVICE_LABEL) {
-                println!("{} Service is ACTIVE (running)", "[RUNNING]".green().bold());
+                let is_daemon = fs::read_to_string(&plist_path)
+                    .map(|c| c.contains("<key>KeepAlive</key>"))
+                    .unwrap_or(false);
+                if is_daemon {
+                    println!("{} Service is ACTIVE (running as daemon)", "[RUNNING]".green().bold());
+                } else {
+                    println!("{} Service is ACTIVE (Zero-memory WatchPaths event trigger)", "[READY]".green().bold());
+                    println!("Footprint: 0 MB memory idle, wakes on file changes");
+                }
                 println!("Plist: {}", plist_path.display());
                 println!("Logs: /tmp/unquarantine.log");
             } else if plist_path.exists() {
-                println!("{} Service plist exists but is not running", "[STOPPED]".yellow().bold());
+                println!("{} Service plist exists but is not loaded", "[STOPPED]".yellow().bold());
             } else {
                 println!("{} Service is not installed", "[NOT INSTALLED]".blue());
             }

@@ -71,13 +71,16 @@ unquarantine watch
 unquarantine watch -p ~/Downloads -p /opt/homebrew
 ```
 
-### 4. 注册为开机自启后台守护进程
+### 4. 注册为开机自启后台服务
 
 通过系统 `launchd` 服务常驻后台：
 
 ```bash
-# 安装并立即启动服务
+# 安装并注册服务（默认使用 macOS WatchPaths 事件触发：平时 0MB 内存占用，仅在有新文件落地时自动唤醒清理）
 unquarantine service install
+
+# 如果需要作为长驻守护进程（保持 watch 模式常驻）
+unquarantine service install --daemon
 
 # 查看服务状态
 unquarantine service status

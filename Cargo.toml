@@ -11,3 +11,10 @@ walkdir = "2.5"
 notify = "8.0"
 colored = "2.1"
 dirs = "5.0"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
