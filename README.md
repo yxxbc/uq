@@ -36,7 +36,7 @@
 通过 Homebrew 专属 Tap 一键安装并注册开机自启服务：
 
 ```bash
-brew tap SHORiN-KiWATA/uq https://github.com/SHORiN-KiWATA/uq && brew install uq && uq service install
+brew tap yxxbc/uq https://github.com/yxxbc/uq && brew install uq && uq service install
 ```
 
 > **搞定！** 执行完毕后，`uq` 就会常驻于系统后台。
@@ -120,7 +120,7 @@ uq -l en --help
 如果你未安装 Homebrew，也可直接通过 Rust 工具链构建：
 
 ```bash
-git clone https://github.com/SHORiN-KiWATA/uq.git
+git clone https://github.com/yxxbc/uq.git
 cd uq
 cargo build --release
 sudo cp target/release/uq /usr/local/bin/

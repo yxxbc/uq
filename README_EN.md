@@ -25,7 +25,7 @@ Say goodbye to "App is damaged and cannot be opened" and "Apple cannot verify th
 Install via Homebrew Tap and register the zero-memory background service in one go:
 
 ```bash
-brew tap SHORiN-KiWATA/uq https://github.com/SHORiN-KiWATA/uq && brew install uq && uq service install
+brew tap yxxbc/uq https://github.com/yxxbc/uq && brew install uq && uq service install
 ```
 
 > **Done!** `uq` will monitor `~/Downloads` and `/Applications` using native macOS `WatchPaths`.

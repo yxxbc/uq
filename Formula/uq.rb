@@ -1,11 +1,11 @@
 class Uq < Formula
   desc "Lightning-fast macOS quarantine remover & background watcher"
-  homepage "https://github.com/SHORiN-KiWATA/uq"
-  url "https://github.com/SHORiN-KiWATA/uq.git", branch: "master"
+  homepage "https://github.com/yxxbc/uq"
+  url "https://github.com/yxxbc/uq.git", branch: "master"
   version "0.1.0"
   license "MIT"
 
-  head "https://github.com/SHORiN-KiWATA/uq.git", branch: "master"
+  head "https://github.com/yxxbc/uq.git", branch: "master"
 
   depends_on "rust" => :build
 
