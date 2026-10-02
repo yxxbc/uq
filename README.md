@@ -89,7 +89,30 @@ unquarantine service status
 unquarantine service uninstall
 ```
 
-> 日志默认输出在 `/tmp/unquarantine.log`，方便随时排查。
+### 5. 语言切换与国际化 (i18n)
+
+支持中英文双语帮助文档和运行时提示，自动跟随系统语言：
+
+```bash
+# 查看当前语言设置
+unquarantine lang
+
+# 永久切换为英文 / 中文
+unquarantine lang en
+unquarantine lang zh
+
+# 单次命令临时指定语言查看帮助
+unquarantine -l en --help
+unquarantine -l zh --help
+```
+
+### 6. 查看版本号
+
+```bash
+unquarantine -V
+# 或
+unquarantine --version
+```
 
 ---
 

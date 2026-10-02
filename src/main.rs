@@ -1,5 +1,7 @@
-use clap::{Parser, Subcommand};
+mod i18n;
+
 use colored::*;
+use i18n::{detect_default_lang, save_lang, Lang, Messages};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,57 +13,67 @@ use walkdir::WalkDir;
 const QUARANTINE_ATTR: &str = "com.apple.quarantine";
 const SERVICE_LABEL: &str = "com.user.unquarantine";
 
-#[derive(Parser)]
-#[command(name = "unquarantine")]
-#[command(author = "Shorin & Miyu")]
-#[command(version = "0.1.0")]
-#[command(about = "Lightning-fast macOS quarantine remover & background watcher", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
+fn build_cli(msg: &Messages) -> clap::Command {
+    use clap::{arg, value_parser, ArgAction};
 
-    /// Paths to strip quarantine attributes from (default action if no subcommand is given)
-    #[arg(value_name = "PATH")]
-    paths: Vec<PathBuf>,
-
-    /// Suppress detailed output
-    #[arg(short, long)]
-    quiet: bool,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Inspect files/directories for quarantine attributes
-    Check {
-        /// Paths to inspect
-        #[arg(required = true, value_name = "PATH")]
-        paths: Vec<PathBuf>,
-    },
-    /// Watch directories and automatically clear quarantine on new downloads/apps
-    Watch {
-        /// Directories to monitor (default: ~/Downloads, /Applications)
-        #[arg(short, long, value_name = "DIR")]
-        paths: Vec<PathBuf>,
-    },
-    /// Manage background launchd service
-    Service {
-        #[command(subcommand)]
-        action: ServiceAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum ServiceAction {
-    /// Install and register launchd agent (defaults to 0-memory WatchPaths event mode)
-    Install {
-        /// Run as a persistent background daemon (watch mode) instead of zero-memory WatchPaths event trigger
-        #[arg(short, long)]
-        daemon: bool,
-    },
-    /// Stop and remove launchd background agent
-    Uninstall,
-    /// Check background agent status
-    Status,
+    clap::Command::new("unquarantine")
+        .version(env!("CARGO_PKG_VERSION"))
+        .author("Shorin & Miyu")
+        .about(msg.about())
+        .arg(
+            arg!([PATH] ... "paths")
+                .help(msg.arg_paths())
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            arg!(-q --quiet)
+                .help(msg.arg_quiet())
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            arg!(-l --lang <LANG>)
+                .help(msg.arg_lang())
+                .action(ArgAction::Set),
+        )
+        .subcommand(
+            clap::Command::new("check")
+                .about(msg.cmd_check())
+                .arg(
+                    arg!(<PATH> ... "paths")
+                        .help(msg.arg_paths())
+                        .required(true)
+                        .value_parser(value_parser!(PathBuf)),
+                ),
+        )
+        .subcommand(
+            clap::Command::new("watch")
+                .about(msg.cmd_watch())
+                .arg(
+                    arg!(-p --paths <DIR> ... "dirs")
+                        .help(msg.cmd_watch_paths_help())
+                        .value_parser(value_parser!(PathBuf)),
+                ),
+        )
+        .subcommand(
+            clap::Command::new("service")
+                .about(msg.cmd_service())
+                .subcommand(
+                    clap::Command::new("install")
+                        .about(msg.cmd_service_install())
+                        .arg(
+                            arg!(-d --daemon)
+                                .help(msg.cmd_service_daemon())
+                                .action(ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(clap::Command::new("uninstall").about(msg.cmd_service_uninstall()))
+                .subcommand(clap::Command::new("status").about(msg.cmd_service_status())),
+        )
+        .subcommand(
+            clap::Command::new("lang")
+                .about(msg.cmd_lang())
+                .arg(arg!([LANG]).help(msg.cmd_lang_target())),
+        )
 }
 
 fn remove_quarantine(path: &Path) -> Result<bool, std::io::Error> {
@@ -73,13 +85,17 @@ fn remove_quarantine(path: &Path) -> Result<bool, std::io::Error> {
     }
 }
 
-fn process_path(target: &Path, quiet: bool) -> (usize, usize) {
+fn process_path(target: &Path, quiet: bool, lang: Lang) -> (usize, usize) {
     let mut total_scanned = 0;
     let mut total_removed = 0;
 
     if !target.exists() {
         if !quiet {
-            eprintln!("{} Path does not exist: {}", "[-]".red(), target.display());
+            let err_msg = match lang {
+                Lang::Zh => format!("{} 路径不存在: {}", "[-]".red(), target.display()),
+                Lang::En => format!("{} Path does not exist: {}", "[-]".red(), target.display()),
+            };
+            eprintln!("{}", err_msg);
         }
         return (0, 0);
     }
@@ -92,40 +108,58 @@ fn process_path(target: &Path, quiet: bool) -> (usize, usize) {
                 total_removed += 1;
             }
             Ok(false) => {}
-            Err(e) => {
-                if !quiet && e.kind() != std::io::ErrorKind::NotFound {
-                    // Ignore permission / not found errors quietly unless verbose
-                }
-            }
+            Err(_) => {}
         }
     }
 
     if !quiet {
         if total_removed > 0 {
-            println!(
-                "{} Removed quarantine from {} ({} item{})",
-                "[+]".green().bold(),
-                target.display(),
-                total_removed,
-                if total_removed > 1 { "s" } else { "" }
-            );
+            let msg = match lang {
+                Lang::Zh => format!(
+                    "{} 已清除 {} 的隔离属性（共处理 {} 项）",
+                    "[+]".green().bold(),
+                    target.display(),
+                    total_removed
+                ),
+                Lang::En => format!(
+                    "{} Removed quarantine from {} ({} item{})",
+                    "[+]".green().bold(),
+                    target.display(),
+                    total_removed,
+                    if total_removed > 1 { "s" } else { "" }
+                ),
+            };
+            println!("{}", msg);
         } else {
-            println!(
-                "{} No quarantine found on {} (scanned {} items)",
-                "[=]".blue(),
-                target.display(),
-                total_scanned
-            );
+            let msg = match lang {
+                Lang::Zh => format!(
+                    "{} {} 未发现隔离属性（已扫描 {} 项）",
+                    "[=]".blue(),
+                    target.display(),
+                    total_scanned
+                ),
+                Lang::En => format!(
+                    "{} No quarantine found on {} (scanned {} items)",
+                    "[=]".blue(),
+                    target.display(),
+                    total_scanned
+                ),
+            };
+            println!("{}", msg);
         }
     }
 
     (total_scanned, total_removed)
 }
 
-fn handle_check(paths: &[PathBuf]) {
+fn handle_check(paths: &[PathBuf], lang: Lang) {
     for path in paths {
         if !path.exists() {
-            println!("{} {} (not found)", "[-]".red(), path.display());
+            let not_found = match lang {
+                Lang::Zh => "文件不存在",
+                Lang::En => "not found",
+            };
+            println!("{} {} ({})", "[-]".red(), path.display(), not_found);
             continue;
         }
 
@@ -145,7 +179,11 @@ fn handle_check(paths: &[PathBuf]) {
         }
 
         if found_count == 0 {
-            println!("{} Clean: {}", "[OK]".green().bold(), path.display());
+            let clean_label = match lang {
+                Lang::Zh => "正常无隔离属性",
+                Lang::En => "Clean",
+            };
+            println!("{} {}: {}", "[OK]".green().bold(), clean_label, path.display());
         }
     }
 }
@@ -162,15 +200,23 @@ fn default_watch_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn handle_watch(custom_paths: &[PathBuf]) {
+fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
     let watch_paths = if custom_paths.is_empty() {
         default_watch_dirs()
     } else {
         custom_paths.to_vec()
     };
 
-    println!("{}", "=== Unquarantine Watcher Started ===".cyan().bold());
-    println!("Monitoring directories:");
+    let title = match lang {
+        Lang::Zh => "=== Unquarantine 实时监听已启动 ===".cyan().bold(),
+        Lang::En => "=== Unquarantine Watcher Started ===".cyan().bold(),
+    };
+    println!("{}", title);
+    let prompt = match lang {
+        Lang::Zh => "正在监听以下目录:",
+        Lang::En => "Monitoring directories:",
+    };
+    println!("{}", prompt);
     for p in &watch_paths {
         println!("  -> {}", p.display().to_string().yellow());
     }
@@ -200,20 +246,28 @@ fn handle_watch(custom_paths: &[PathBuf]) {
                         if !path.exists() {
                             continue;
                         }
-                        // Avoid processing inside app packages repeatedly during deep copy
                         if let Some(ext) = path.extension() {
                             if ext == "download" || ext == "crdownload" || ext == "part" {
                                 continue;
                             }
                         }
-                        let (_, removed) = process_path(&path, true);
+                        let (_, removed) = process_path(&path, true, lang);
                         if removed > 0 {
-                            println!(
-                                "{} [Auto-Clean] Cleared {} quarantine attribute(s) from {}",
-                                "[+]".green().bold(),
-                                removed,
-                                path.display()
-                            );
+                            let msg = match lang {
+                                Lang::Zh => format!(
+                                    "{} [自动清除] 已为 {} 移除 {} 个隔离属性",
+                                    "[+]".green().bold(),
+                                    path.display(),
+                                    removed
+                                ),
+                                Lang::En => format!(
+                                    "{} [Auto-Clean] Cleared {} quarantine attribute(s) from {}",
+                                    "[+]".green().bold(),
+                                    removed,
+                                    path.display()
+                                ),
+                            };
+                            println!("{}", msg);
                         }
                     }
                 }
@@ -236,11 +290,12 @@ fn get_current_exe() -> PathBuf {
     std::env::current_exe().expect("Failed to determine current executable path")
 }
 
-fn handle_service(action: ServiceAction) {
+fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
     let plist_path = get_plist_path();
 
-    match action {
-        ServiceAction::Install { daemon } => {
+    match action_matches.subcommand() {
+        Some(("install", sub_m)) => {
+            let daemon = sub_m.get_flag("daemon");
             let exe_path = get_current_exe();
             let parent_dir = plist_path.parent().unwrap();
             fs::create_dir_all(parent_dir).expect("Failed to create LaunchAgents directory");
@@ -319,34 +374,59 @@ fn handle_service(action: ServiceAction) {
 
             match status {
                 Ok(s) if s.success() => {
-                    println!(
-                        "{} Launchd agent installed successfully!",
-                        "[+]".green().bold()
-                    );
+                    let success_msg = match lang {
+                        Lang::Zh => format!("{} 后台服务安装并注册成功！", "[+]".green().bold()),
+                        Lang::En => format!("{} Launchd agent installed successfully!", "[+]".green().bold()),
+                    };
+                    println!("{}", success_msg);
                     if daemon {
-                        println!("Mode: Persistent Daemon (watch mode)");
+                        let m = match lang {
+                            Lang::Zh => "运行模式: 持续常驻守护进程 (watch 模式)",
+                            Lang::En => "Mode: Persistent Daemon (watch mode)",
+                        };
+                        println!("{}", m);
                     } else {
-                        println!("Mode: Zero-Memory Event Trigger (WatchPaths)");
-                        println!("Idle Footprint: 0 MB memory, 0% CPU");
+                        let m1 = match lang {
+                            Lang::Zh => "运行模式: 零内存事件唤醒 (WatchPaths)",
+                            Lang::En => "Mode: Zero-Memory Event Trigger (WatchPaths)",
+                        };
+                        let m2 = match lang {
+                            Lang::Zh => "空闲开销: 0 MB 内存, 0% CPU",
+                            Lang::En => "Idle Footprint: 0 MB memory, 0% CPU",
+                        };
+                        println!("{}", m1);
+                        println!("{}", m2);
                     }
                     println!("Service Plist: {}", plist_path.display());
                     println!("Logs: /tmp/unquarantine.log");
                 }
                 _ => {
-                    eprintln!("{} Failed to load launchd service with launchctl.", "[-]".red());
+                    let err_msg = match lang {
+                        Lang::Zh => format!("{} 使用 launchctl 加载服务失败。", "[-]".red()),
+                        Lang::En => format!("{} Failed to load launchd service with launchctl.", "[-]".red()),
+                    };
+                    eprintln!("{}", err_msg);
                 }
             }
         }
-        ServiceAction::Uninstall => {
+        Some(("uninstall", _)) => {
             if plist_path.exists() {
                 let _ = Command::new("launchctl").arg("unload").arg(&plist_path).output();
                 let _ = fs::remove_file(&plist_path);
-                println!("{} Background agent stopped and uninstalled.", "[+]".green().bold());
+                let msg = match lang {
+                    Lang::Zh => format!("{} 后台服务已停止并卸载完成。", "[+]".green().bold()),
+                    Lang::En => format!("{} Background agent stopped and uninstalled.", "[+]".green().bold()),
+                };
+                println!("{}", msg);
             } else {
-                println!("{} Background agent is not installed.", "[=]".blue());
+                let msg = match lang {
+                    Lang::Zh => format!("{} 后台服务尚未安装。", "[=]".blue()),
+                    Lang::En => format!("{} Background agent is not installed.", "[=]".blue()),
+                };
+                println!("{}", msg);
             }
         }
-        ServiceAction::Status => {
+        Some(("status", _)) => {
             let output = Command::new("launchctl")
                 .arg("list")
                 .output()
@@ -357,54 +437,152 @@ fn handle_service(action: ServiceAction) {
                     .map(|c| c.contains("<key>KeepAlive</key>"))
                     .unwrap_or(false);
                 if is_daemon {
-                    println!("{} Service is ACTIVE (running as daemon)", "[RUNNING]".green().bold());
+                    let msg = match lang {
+                        Lang::Zh => format!("{} 服务处于激活状态 (常驻守护模式)", "[RUNNING]".green().bold()),
+                        Lang::En => format!("{} Service is ACTIVE (running as daemon)", "[RUNNING]".green().bold()),
+                    };
+                    println!("{}", msg);
                 } else {
-                    println!("{} Service is ACTIVE (Zero-memory WatchPaths event trigger)", "[READY]".green().bold());
-                    println!("Footprint: 0 MB memory idle, wakes on file changes");
+                    let msg1 = match lang {
+                        Lang::Zh => format!("{} 服务处于就绪状态 (零内存 WatchPaths 事件监听)", "[READY]".green().bold()),
+                        Lang::En => format!("{} Service is ACTIVE (Zero-memory WatchPaths event trigger)", "[READY]".green().bold()),
+                    };
+                    let msg2 = match lang {
+                        Lang::Zh => "资源占用: 平时 0 MB 内存，仅在文件变动时唤醒处理",
+                        Lang::En => "Footprint: 0 MB memory idle, wakes on file changes",
+                    };
+                    println!("{}", msg1);
+                    println!("{}", msg2);
                 }
                 println!("Plist: {}", plist_path.display());
                 println!("Logs: /tmp/unquarantine.log");
             } else if plist_path.exists() {
-                println!("{} Service plist exists but is not loaded", "[STOPPED]".yellow().bold());
+                let msg = match lang {
+                    Lang::Zh => format!("{} 服务配置文件存在但未加载", "[STOPPED]".yellow().bold()),
+                    Lang::En => format!("{} Service plist exists but is not loaded", "[STOPPED]".yellow().bold()),
+                };
+                println!("{}", msg);
             } else {
-                println!("{} Service is not installed", "[NOT INSTALLED]".blue());
+                let msg = match lang {
+                    Lang::Zh => format!("{} 服务未安装", "[NOT INSTALLED]".blue()),
+                    Lang::En => format!("{} Service is not installed", "[NOT INSTALLED]".blue()),
+                };
+                println!("{}", msg);
             }
         }
+        _ => {}
     }
 }
 
-fn main() {
-    let cli = Cli::parse();
+fn handle_lang_command(target_lang: Option<&String>, current_lang: Lang) {
+    if let Some(target) = target_lang {
+        if let Some(new_lang) = Lang::from_str(target) {
+            if let Err(e) = save_lang(new_lang) {
+                eprintln!("{} Failed to save language: {}", "[-]".red(), e);
+            } else {
+                let msg = match new_lang {
+                    Lang::Zh => format!("{} 默认语言已切换为中文 (zh)", "[+]".green().bold()),
+                    Lang::En => format!("{} Default language set to English (en)", "[+]".green().bold()),
+                };
+                println!("{}", msg);
+            }
+        } else {
+            eprintln!("{} Unknown language: '{}'. Supported: zh, en", "[-]".red(), target);
+        }
+    } else {
+        let msg = match current_lang {
+            Lang::Zh => format!("当前默认语言: 中文 (zh)"),
+            Lang::En => format!("Current default language: English (en)"),
+        };
+        println!("{}", msg);
+    }
+}
 
-    match cli.command {
-        Some(Commands::Check { paths }) => {
-            handle_check(&paths);
+fn extract_cli_lang() -> Option<Lang> {
+    let args: Vec<String> = std::env::args().collect();
+    for i in 0..args.len() {
+        if args[i] == "--lang" || args[i] == "-l" {
+            if let Some(val) = args.get(i + 1) {
+                return Lang::from_str(val);
+            }
+        } else if let Some(val) = args[i].strip_prefix("--lang=") {
+            return Lang::from_str(val);
+        } else if let Some(val) = args[i].strip_prefix("-l=") {
+            return Lang::from_str(val);
         }
-        Some(Commands::Watch { paths }) => {
-            handle_watch(&paths);
+    }
+    None
+}
+
+fn main() {
+    // 1. Determine active language
+    let active_lang = extract_cli_lang().unwrap_or_else(detect_default_lang);
+    let msg = Messages::new(active_lang);
+
+    // 2. Build and parse dynamic CLI
+    let app = build_cli(&msg);
+    let matches = app.get_matches();
+
+    let quiet = matches.get_flag("quiet");
+
+    // 3. Dispatch subcommands
+    match matches.subcommand() {
+        Some(("check", sub_m)) => {
+            let paths: Vec<PathBuf> = sub_m.get_many::<PathBuf>("paths").unwrap().cloned().collect();
+            handle_check(&paths, active_lang);
         }
-        Some(Commands::Service { action }) => {
-            handle_service(action);
+        Some(("watch", sub_m)) => {
+            let paths: Vec<PathBuf> = sub_m
+                .get_many::<PathBuf>("paths")
+                .map(|p| p.cloned().collect())
+                .unwrap_or_default();
+            handle_watch(&paths, active_lang);
         }
-        None => {
-            if cli.paths.is_empty() {
-                eprintln!("{} No paths specified. Run `unquarantine --help` for usage.", "[-]".yellow());
+        Some(("service", sub_m)) => {
+            handle_service(sub_m, active_lang);
+        }
+        Some(("lang", sub_m)) => {
+            let target = sub_m.get_one::<String>("LANG");
+            handle_lang_command(target, active_lang);
+        }
+        _ => {
+            let paths: Vec<PathBuf> = matches
+                .get_many::<PathBuf>("PATH")
+                .map(|p| p.cloned().collect())
+                .unwrap_or_default();
+
+            if paths.is_empty() {
+                let err_msg = match active_lang {
+                    Lang::Zh => "未指定路径。请运行 `unquarantine --help` 查看使用说明。",
+                    Lang::En => "No paths specified. Run `unquarantine --help` for usage.",
+                };
+                eprintln!("{} {}", "[-]".yellow(), err_msg);
                 std::process::exit(1);
             }
+
             let mut total_s = 0;
             let mut total_r = 0;
-            for p in &cli.paths {
-                let (s, r) = process_path(p, cli.quiet);
+            for p in &paths {
+                let (s, r) = process_path(p, quiet, active_lang);
                 total_s += s;
                 total_r += r;
             }
-            if !cli.quiet && cli.paths.len() > 1 {
-                println!(
-                    "{} Done. Processed {} items total, stripped quarantine from {}.",
-                    "[*]".cyan().bold(),
-                    total_s,
-                    total_r
-                );
+            if !quiet && paths.len() > 1 {
+                let summary = match active_lang {
+                    Lang::Zh => format!(
+                        "{} 处理完毕。共扫描 {} 项，清除 {} 项的隔离属性。",
+                        "[*]".cyan().bold(),
+                        total_s,
+                        total_r
+                    ),
+                    Lang::En => format!(
+                        "{} Done. Processed {} items total, stripped quarantine from {}.",
+                        "[*]".cyan().bold(),
+                        total_s,
+                        total_r
+                    ),
+                };
+                println!("{}", summary);
             }
         }
     }
