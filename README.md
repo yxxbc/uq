@@ -75,7 +75,17 @@ Homebrew 与一键脚本均同时支持 **Apple Silicon (arm64)** 与 **Intel (x
 - **`.app`**：已安装到 `/Applications` 的应用会在落地瞬间被自动解除隔离。
 - **`.dmg`**：镜像文件本身会被解锁；`uq do` 还会顺带清理当前已挂载的镜像卷内容。已从镜像拖入 `/Applications` 的应用同样在自动清理范围内。
 - **`.pkg`**：安装包本身会被解锁，安装后落到 `/Applications`、`/usr/local` 等位置的文件同样被监听清理。
-- **权限说明**：macOS 13+ 的 App Management 保护会阻止普通进程修改 `/Applications` 内的应用包。后台服务会把这些失败写入日志，此时手动执行一次 `sudo uq do` 即可（或在 系统设置 › 隐私与安全性 › App 管理 中允许你的终端）。
+- **权限说明**：macOS 13+ 的 App Management 会阻止修改 `/Applications` 内已有的应用包，**且 `sudo` 无效**（权限跟随发起进程，也就是你的终端）。解决方式：
+
+  ```bash
+  # 1) 打开面板，把你的终端加入并勾选，然后重启终端
+  open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppBundles"
+  sudo uq do
+
+  # 2) 或对 Homebrew Cask 从源头避免隔离属性（推荐）
+  export HOMEBREW_CASK_OPTS="--no-quarantine"
+  ```
+  后台服务会把这些失败写入 `uq log`。
 
 ---
 

@@ -75,7 +75,17 @@ Written in pure Rust, running as a launchd agent driven by realtime FSEvents:
 - **`.app`**: Apps dropped into `/Applications` are unquarantined at the moment they land.
 - **`.dmg`**: The image file itself is unlocked; `uq do` also cleans contents of currently mounted images, and apps dragged into `/Applications` are covered by the watcher.
 - **`.pkg`**: The package is unlocked, and files installed into `/Applications`, `/usr/local`, etc. are watched as well.
-- **Permissions**: macOS 13+ App Management blocks plain processes from modifying app bundles in `/Applications`. Such failures are logged; run `sudo uq do` once (or allow your terminal under System Settings › Privacy & Security › App Management).
+- **Permissions**: macOS 13+ App Management blocks modifying existing app bundles in `/Applications`, and **`sudo` does not bypass it** (the permission follows the invoking process — your terminal). Fix:
+
+  ```bash
+  # 1) Open the pane, add and enable your terminal, then restart the terminal
+  open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppBundles"
+  sudo uq do
+
+  # 2) Or avoid quarantine at the source for Homebrew Cask (recommended)
+  export HOMEBREW_CASK_OPTS="--no-quarantine"
+  ```
+  Failures are also written to `uq log` by the background service.
 
 ---
 

@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.6] - 2026-10-24
+
+### Fixed
+- Corrected the App Management permission hint: `sudo` cannot bypass it because macOS evaluates the permission against the invoking process (your terminal). The hint now points to System Settings › App Management with a ready-to-run deep link, and suggests `HOMEBREW_CASK_OPTS="--no-quarantine"` for Homebrew Cask installs.
+
 ## [0.1.5] - 2026-10-24
 
 ### Added

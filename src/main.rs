@@ -321,16 +321,23 @@ fn result_line(
 }
 
 fn permission_hint(lang: Lang, failed: usize) -> String {
+    let open_cmd = "open \"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppBundles\"";
     match lang {
         Lang::Zh => format!(
-            "⚠️  {} 项因系统权限 (App Management/TCC) 无法修改。请运行 {}，或在 系统设置 › 隐私与安全性 › App 管理 中允许终端 uq",
+            "⚠️  {} 项被 App Management 拦截（sudo 也无效：权限跟随发起进程，也就是你的终端）。\n   \
+             1) 系统设置 › 隐私与安全性 › App 管理 → 加入并勾选你的终端（建议同时给「完全磁盘访问权限」），重启终端后再试\n   \
+             2) 一键跳转：{}\n   \
+             3) Homebrew Cask 安装的应用可从源头避免：export HOMEBREW_CASK_OPTS=\"--no-quarantine\"",
             failed,
-            "sudo uq do".yellow().bold()
+            open_cmd.yellow(),
         ),
         Lang::En => format!(
-            "⚠️  {} item(s) blocked by system permissions (App Management/TCC). Run {} or allow uq under System Settings › Privacy & Security › App Management",
+            "⚠️  {} item(s) blocked by App Management (sudo does not help: permission follows the invoking process, your terminal).\n   \
+             1) System Settings › Privacy & Security › App Management → add and enable your terminal (grant Full Disk Access too), restart the terminal and retry\n   \
+             2) Jump straight there: {}\n   \
+             3) For Homebrew Cask, avoid it at the source: export HOMEBREW_CASK_OPTS=\"--no-quarantine\"",
             failed,
-            "sudo uq do".yellow().bold()
+            open_cmd.yellow(),
         ),
     }
 }
