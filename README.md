@@ -43,7 +43,7 @@ brew install uq
 uq service install
 ```
 
-也可直接在 [GitHub Releases](https://github.com/yxxbc/uq/releases) 下载对应架构免编译二进制使用。
+Homebrew 与一键脚本均同时支持 **Apple Silicon (arm64)** 与 **Intel (x86_64)**；也可直接在 [GitHub Releases](https://github.com/yxxbc/uq/releases) 下载对应架构免编译二进制使用。
 
 ---
 
@@ -61,11 +61,21 @@ uq service install
 
 ## 性能损耗与开销
 
-本工具使用 Rust 编写，通过 launchd 系统事件驱动：
+本工具使用 Rust 编写，默认以 launchd 常驻守护 + FSEvents 实时事件驱动：
 
-- **空闲常驻消耗**：**0 进程 / 0 MB 内存 / 0% CPU**。采用 macOS 原生 `WatchPaths` 机制，平时不运行后台守护进程。
-- **触发运行时**：仅在新文件写入完成时由系统短暂唤醒，处理耗时通常在 **10~30 毫秒** 之间，瞬时内存占用约 **7 MB**，处理完毕后进程立即退出并释放全部资源。
-- **程序体积**：编译启用 LTO 与 Strip 优化，二进制大小约 **513 KB**。
+- **空闲常驻消耗**：约 **7 MB 内存 / 接近 0% CPU**，不轮询、不占用磁盘 IO。
+- **触发延迟**：文件落地后 **毫秒级**感知，300 毫秒左右完成清理（同类事件自动合并，拷贝一个 App 只扫一遍）。
+- **零内存模式**：`uq service install --zero` 改用系统 `WatchPaths` 唤醒，空闲 **0 进程 / 0 MB 内存**，代价是触发更慢、粒度更粗（整目录重扫）。
+- **程序体积**：编译启用 LTO 与 Strip 优化，二进制大小约 **640 KB**。
+
+---
+
+## 支持范围（.app / .dmg / .pkg）
+
+- **`.app`**：已安装到 `/Applications` 的应用会在落地瞬间被自动解除隔离。
+- **`.dmg`**：镜像文件本身会被解锁；`uq do` 还会顺带清理当前已挂载的镜像卷内容。已从镜像拖入 `/Applications` 的应用同样在自动清理范围内。
+- **`.pkg`**：安装包本身会被解锁，安装后落到 `/Applications`、`/usr/local` 等位置的文件同样被监听清理。
+- **权限说明**：macOS 13+ 的 App Management 保护会阻止普通进程修改 `/Applications` 内的应用包。后台服务会把这些失败写入日志，此时手动执行一次 `sudo uq do` 即可（或在 系统设置 › 隐私与安全性 › App 管理 中允许你的终端）。
 
 ---
 
@@ -77,7 +87,11 @@ uq service install
 # 查看服务状态与性能仪表盘
 uq
 
-# 手动清除指定应用或文件的隔离属性
+# 一键手动清理（无参数时清理 ~/Downloads、桌面、/Applications、/usr/local 与已挂载镜像）
+uq do
+
+# 手动清理指定对象（.dmg / .pkg / .app / 任意文件均可）
+uq do ~/Downloads/SomeApp.dmg
 uq /Applications/SomeApp.app
 
 # 检查目标是否携带隔离属性及来源信息
@@ -95,7 +109,8 @@ uq log -c
 # 服务管理
 uq service status      # 查看服务状态
 uq service uninstall   # 卸载后台服务
-uq service install     # 重新安装服务
+uq service install     # 重新安装服务（默认 FSEvents 实时守护）
+uq service install -z  # 零内存 WatchPaths 模式（更慢，空闲 0 MB）
 
 # 切换语言 (支持中/英双语，默认自动跟随系统)
 uq lang zh

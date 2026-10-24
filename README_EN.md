@@ -43,7 +43,7 @@ brew install uq
 uq service install
 ```
 
-Prebuilt binaries are also available on [GitHub Releases](https://github.com/yxxbc/uq/releases).
+Both Homebrew and the install script ship **Apple Silicon (arm64)** and **Intel (x86_64)** binaries; prebuilt archives are also on [GitHub Releases](https://github.com/yxxbc/uq/releases).
 
 ---
 
@@ -61,11 +61,21 @@ Prebuilt binaries are also available on [GitHub Releases](https://github.com/yxx
 
 ## Performance & Resource Footprint
 
-Written in pure Rust and driven by macOS launchd system events:
+Written in pure Rust, running as a launchd agent driven by realtime FSEvents:
 
-- **Idle Overhead**: **0 Processes / 0 MB Memory / 0% CPU**. Powered by native macOS `WatchPaths`, requiring no persistent daemon in the background.
-- **Active Overhead**: Briefly awakened upon file writes. Processing finishes in **10–30 ms** with peak transient memory around **7 MB**, immediately terminating upon completion to free all resources.
-- **Binary Size**: Optimized with LTO and Strip down to **~513 KB**.
+- **Idle Overhead**: **~7 MB memory / ~0% CPU**. No polling, no disk I/O while idle.
+- **Trigger Latency**: Detects new files in **milliseconds** and finishes cleanup in ~300 ms (bursts are merged, so copying an app is swept once).
+- **Zero-Memory Mode**: `uq service install --zero` switches to launchd `WatchPaths`: **0 processes / 0 MB idle**, at the cost of slower, coarser triggers (whole-directory rescans).
+- **Binary Size**: Optimized with LTO and Strip down to **~640 KB**.
+
+---
+
+## Coverage (.app / .dmg / .pkg)
+
+- **`.app`**: Apps dropped into `/Applications` are unquarantined at the moment they land.
+- **`.dmg`**: The image file itself is unlocked; `uq do` also cleans contents of currently mounted images, and apps dragged into `/Applications` are covered by the watcher.
+- **`.pkg`**: The package is unlocked, and files installed into `/Applications`, `/usr/local`, etc. are watched as well.
+- **Permissions**: macOS 13+ App Management blocks plain processes from modifying app bundles in `/Applications`. Such failures are logged; run `sudo uq do` once (or allow your terminal under System Settings › Privacy & Security › App Management).
 
 ---
 
@@ -77,7 +87,11 @@ Running `uq` without arguments displays service status and performance metrics:
 # Display dashboard and service status
 uq
 
-# Manually strip quarantine from a file or application
+# One-shot manual sweep (no args: ~/Downloads, Desktop, /Applications, /usr/local, mounted images)
+uq do
+
+# Clean a specific target (.dmg / .pkg / .app / any file)
+uq do ~/Downloads/SomeApp.dmg
 uq /Applications/SomeApp.app
 
 # Check quarantine attributes and origin metadata
@@ -95,7 +109,8 @@ uq log -c
 # Service management
 uq service status
 uq service uninstall
-uq service install
+uq service install     # default: realtime FSEvents daemon
+uq service install -z  # zero-memory WatchPaths mode (slower, 0 MB idle)
 
 # Language switching (zh/en, automatically detects system locale by default)
 uq lang en

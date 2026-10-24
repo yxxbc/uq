@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.5] - 2026-10-24
+
+### Added
+- Added `uq do`, a one-shot manual cleanup command: with no arguments it sweeps `~/Downloads`, Desktop, `/Applications`, `/usr/local` and currently mounted disk images, and it also accepts explicit paths and archive files.
+- Added coverage for `.dmg` / `.pkg` / `.zip` / `.xip` downloads: archives are unlocked, mounted image contents are swept, and install destinations (`/Applications`, `/usr/local`, mounted volumes) are watched.
+- Added startup sweep: the watcher cleans anything that arrived while it was not running.
+- Added failure reporting with an actionable hint when macOS App Management/TCC blocks modifying an app bundle (`sudo uq do`).
+
+### Changed
+- The background service now installs as a realtime FSEvents daemon by default (cleanup in ~300 ms, ~7 MB idle) instead of `WatchPaths`; the old zero-memory mode moved to `uq service install --zero`.
+- File event bursts are debounced (350 ms) and collapsed to their parent path, so copying a large app triggers one walk instead of thousands.
+- Default sweeps probe each top-level item instead of walking every file, dropping `uq do` on `/Applications` from ~29 s to ~3 ms.
+- Refreshed dashboard/help/README output, and the dashboard binary-size field now reports the real binary size.
+
+### Fixed
+- Fixed the `uq check` subcommand panicking on any invocation (wrong argument id).
+- Fixed quarantine removal errors being silently swallowed, which made permission failures look like "nothing to clean".
+
+### Release
+- `scripts/sync_release_version.py` now also keeps `install.sh` `VERSION` aligned with `Cargo.toml`.
+- `Formula/uq.rb` now ships both Apple Silicon (`arm64`) and Intel (`x86_64`) prebuilt archives instead of rejecting Intel Macs.
+- After tagging `v0.1.5`, run `python3 scripts/sync_release_version.py --fetch-hashes` to fill both architecture checksums from the published archives.
+
 ## [0.1.4] - 2026-10-02
 
 ### Fixed

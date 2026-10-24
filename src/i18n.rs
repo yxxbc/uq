@@ -123,8 +123,8 @@ impl Messages {
 
     pub fn cmd_watch_paths_help(&self) -> &'static str {
         match self.lang {
-            Lang::Zh => "指定监听的目录（默认: ~/Downloads, /Applications）",
-            Lang::En => "Directories to monitor (default: ~/Downloads, /Applications)",
+            Lang::Zh => "指定监听的目录（默认: ~/Downloads, ~/Desktop, /Applications, /Volumes, /usr/local）",
+            Lang::En => "Directories to monitor (default: ~/Downloads, ~/Desktop, /Applications, /Volumes, /usr/local)",
         }
     }
 
@@ -137,8 +137,8 @@ impl Messages {
 
     pub fn cmd_service_install(&self) -> &'static str {
         match self.lang {
-            Lang::Zh => "安装并注册 launchd 服务（默认零内存 WatchPaths 模式）",
-            Lang::En => "Install and register launchd agent (defaults to 0-memory WatchPaths event mode)",
+            Lang::Zh => "安装并注册 launchd 服务（默认 FSEvents 实时守护模式）",
+            Lang::En => "Install and register launchd agent (defaults to realtime FSEvents daemon)",
         }
     }
 
@@ -149,10 +149,24 @@ impl Messages {
         }
     }
 
-    pub fn cmd_service_daemon(&self) -> &'static str {
+    pub fn cmd_service_zero(&self) -> &'static str {
         match self.lang {
-            Lang::Zh => "以持续长驻守护进程运行（watch 模式），而不是零内存事件唤醒模式",
-            Lang::En => "Run as a persistent background daemon (watch mode) instead of zero-memory WatchPaths event trigger",
+            Lang::Zh => "零常驻内存模式：仅在路径变化时由 launchd 唤醒（比默认守护模式慢，事件会丢失合并）",
+            Lang::En => "Zero-idle-memory mode: woken by launchd WatchPaths on path changes (slower than the default daemon)",
+        }
+    }
+
+    pub fn cmd_do(&self) -> &'static str {
+        match self.lang {
+            Lang::Zh => "手动清理隔离属性（.dmg/.pkg 归档与已安装应用均可）",
+            Lang::En => "Manually strip quarantine (archives like .dmg/.pkg and installed apps)",
+        }
+    }
+
+    pub fn arg_do_paths(&self) -> &'static str {
+        match self.lang {
+            Lang::Zh => "要清理的路径；留空则清理 ~/Downloads、桌面、/Applications、/usr/local 与已挂载镜像",
+            Lang::En => "Paths to clean; empty sweeps ~/Downloads, Desktop, /Applications, /usr/local and mounted images",
         }
     }
 

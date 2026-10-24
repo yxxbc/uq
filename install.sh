@@ -6,7 +6,7 @@ set -e
 # GitHub: https://github.com/yxxbc/uq
 # ==============================================================================
 
-VERSION="v0.1.0"
+VERSION="v0.1.5"
 REPO="yxxbc/uq"
 
 # Check OS

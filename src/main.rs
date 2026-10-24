@@ -6,14 +6,16 @@ use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc::channel;
-use std::time::Duration;
+use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
 const QUARANTINE_ATTR: &str = "com.apple.quarantine";
 const SERVICE_LABEL: &str = "com.user.uq";
 const LOG_PATH: &str = "/tmp/uq.log";
 const ERR_LOG_PATH: &str = "/tmp/uq.err";
+// Batch bursts of file events (an app copy emits thousands) before sweeping.
+const DEBOUNCE: Duration = Duration::from_millis(350);
 
 fn log_paths() -> (PathBuf, PathBuf) {
     (PathBuf::from(LOG_PATH), PathBuf::from(ERR_LOG_PATH))
@@ -27,6 +29,37 @@ mod tests {
     fn uses_consistent_service_log_paths() {
         assert_eq!(LOG_PATH, "/tmp/uq.log");
         assert_eq!(ERR_LOG_PATH, "/tmp/uq.err");
+    }
+
+    #[test]
+    fn collapses_nested_event_paths() {
+        let paths = vec![
+            PathBuf::from("/Applications/A.app/Contents/MacOS/a"),
+            PathBuf::from("/Applications/A.app"),
+            PathBuf::from("/Applications/B.app"),
+        ];
+        assert_eq!(
+            collapse_paths(paths),
+            vec![
+                PathBuf::from("/Applications/A.app"),
+                PathBuf::from("/Applications/B.app")
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_partial_downloads_and_hidden_files() {
+        assert!(!is_relevant_path(Path::new("/tmp/a.zip.crdownload")));
+        assert!(!is_relevant_path(Path::new("/tmp/a.dmg.part")));
+        assert!(!is_relevant_path(Path::new("/tmp/.DS_Store")));
+        assert!(is_relevant_path(Path::new("/tmp/App.dmg")));
+    }
+
+    #[test]
+    fn detects_archives() {
+        assert!(is_archive(Path::new("/tmp/App.dmg")));
+        assert!(is_archive(Path::new("/tmp/Tool.PKG")));
+        assert!(!is_archive(Path::new("/tmp/App.app")));
     }
 }
 
@@ -59,6 +92,15 @@ fn build_cli(msg: &Messages) -> clap::Command {
                 .action(ArgAction::Set),
         )
         .subcommand(
+            clap::Command::new("do")
+                .about(msg.cmd_do())
+                .arg(
+                    arg!([PATH] ... "paths")
+                        .help(msg.arg_do_paths())
+                        .value_parser(value_parser!(PathBuf)),
+                ),
+        )
+        .subcommand(
             clap::Command::new("check")
                 .about(msg.cmd_check())
                 .arg(
@@ -84,8 +126,8 @@ fn build_cli(msg: &Messages) -> clap::Command {
                     clap::Command::new("install")
                         .about(msg.cmd_service_install())
                         .arg(
-                            arg!(-d --daemon)
-                                .help(msg.cmd_service_daemon())
+                            arg!(-z --zero)
+                                .help(msg.cmd_service_zero())
                                 .action(ArgAction::SetTrue),
                         ),
                 )
@@ -129,87 +171,259 @@ fn remove_quarantine(path: &Path) -> Result<bool, std::io::Error> {
     }
 }
 
-fn process_path(target: &Path, quiet: bool, verbose: bool, lang: Lang) -> (usize, usize) {
-    let mut total_scanned = 0;
-    let mut total_removed = 0;
-
+fn process_path(target: &Path, quiet: bool, verbose: bool, fast: bool, lang: Lang) -> (usize, usize, usize) {
     if !target.exists() {
         if !quiet {
             let err_msg = match lang {
-                Lang::Zh => format!("{} 路径不存在: {}", "[-]".red(), target.display()),
-                Lang::En => format!("{} Path does not exist: {}", "[-]".red(), target.display()),
+                Lang::Zh => format!("{} 路径不存在: {}", "✗".red().bold(), target.display()),
+                Lang::En => format!("{} Path does not exist: {}", "✗".red().bold(), target.display()),
             };
             eprintln!("{}", err_msg);
         }
-        return (0, 0);
+        return (0, 0, 0);
     }
+
+    let started = Instant::now();
+    let (scanned, removed, failed) = if fast {
+        sweep_fast(target, verbose && !quiet)
+    } else {
+        sweep(target, verbose && !quiet)
+    };
+    if !quiet {
+        println!(
+            "{}",
+            result_line(lang, target, scanned, removed, failed, started.elapsed())
+        );
+    }
+    (scanned, removed, failed)
+}
+
+/// Fast sweep for container dirs (~/Downloads, /Applications, mounted images).
+/// macOS applies quarantine uniformly to a downloaded item, so an item whose root is
+/// clean is skipped instead of walking its whole tree (~99 top-level items instead of 780k).
+fn sweep_fast(target: &Path, verbose: bool) -> (usize, usize, usize) {
+    if !target.is_dir() {
+        return sweep(target, verbose);
+    }
+
+    let mut children: Vec<PathBuf> = match fs::read_dir(target) {
+        Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+        Err(_) => return sweep(target, verbose),
+    };
+    children.sort();
+
+    let mut scanned = 0;
+    let mut removed = 0;
+    let mut failed = 0;
+    for child in children {
+        let quarantined = matches!(xattr::get(&child, QUARANTINE_ATTR), Ok(Some(_)));
+        if quarantined {
+            match remove_quarantine(&child) {
+                Ok(_) => {
+                    let (s, r, f) = sweep(&child, verbose);
+                    scanned += s;
+                    removed += r + 1;
+                    failed += f;
+                }
+                // App Management/TCC blocks the whole bundle, walking it would only fail again.
+                Err(_) => {
+                    scanned += 1;
+                    failed += 1;
+                    if verbose {
+                        println!("    {} {} (permission denied)", "✗".red(), child.display());
+                    }
+                }
+            }
+        } else if !child.is_dir() {
+            let (s, r, f) = sweep(&child, verbose);
+            scanned += s;
+            removed += r;
+            failed += f;
+        } else {
+            scanned += 1;
+        }
+    }
+    (scanned, removed, failed)
+}
+
+/// Strips quarantine from `target` and everything below it.
+/// Returns (scanned, removed, failed).
+fn sweep(target: &Path, verbose: bool) -> (usize, usize, usize) {
+    let mut scanned = 0;
+    let mut removed = 0;
+    let mut failed = 0;
 
     for entry in WalkDir::new(target).follow_links(false).into_iter().filter_map(|e| e.ok()) {
         let p = entry.path();
-        total_scanned += 1;
+        scanned += 1;
         match remove_quarantine(p) {
             Ok(true) => {
-                total_removed += 1;
-                if verbose && !quiet {
-                    let tag = match lang {
-                        Lang::Zh => "[已清除]",
-                        Lang::En => "[STRIPPED]",
-                    };
-                    println!("  {} {}", tag.green().bold(), p.display());
+                removed += 1;
+                if verbose {
+                    println!("    {} {}", "✓".green(), p.display());
                 }
             }
-            Ok(false) => {
-                if verbose && !quiet {
-                    let tag = match lang {
-                        Lang::Zh => "[未检出]",
-                        Lang::En => "[CLEAN]",
-                    };
-                    println!("  {} {}", tag.dimmed(), p.display());
+            Ok(false) => {}
+            Err(e) => {
+                failed += 1;
+                if verbose {
+                    println!("    {} {} ({})", "✗".red(), p.display(), e);
                 }
             }
-            Err(_) => {}
         }
     }
 
-    if !quiet {
-        if total_removed > 0 {
-            let msg = match lang {
-                Lang::Zh => format!(
-                    "{} 已清除 {} 的隔离属性（共处理 {} 项）",
-                    "[+]".green().bold(),
-                    target.display(),
-                    total_removed
-                ),
-                Lang::En => format!(
-                    "{} Removed quarantine from {} ({} item{})",
-                    "[+]".green().bold(),
-                    target.display(),
-                    total_removed,
-                    if total_removed > 1 { "s" } else { "" }
-                ),
-            };
-            println!("{}", msg);
-        } else {
-            let msg = match lang {
-                Lang::Zh => format!(
-                    "{} {} 未发现隔离属性（已扫描 {} 项）",
-                    "[=]".blue(),
-                    target.display(),
-                    total_scanned
-                ),
-                Lang::En => format!(
-                    "{} No quarantine found on {} (scanned {} items)",
-                    "[=]".blue(),
-                    target.display(),
-                    total_scanned
-                ),
-            };
-            println!("{}", msg);
-        }
-    }
-
-    (total_scanned, total_removed)
+    (scanned, removed, failed)
 }
+
+fn result_line(
+    lang: Lang,
+    target: &Path,
+    scanned: usize,
+    removed: usize,
+    failed: usize,
+    elapsed: Duration,
+) -> String {
+    let time = format_elapsed(elapsed);
+    let denied = if failed > 0 {
+        match lang {
+            Lang::Zh => format!(" · 权限不足 {} 项", failed),
+            Lang::En => format!(" · {} denied", failed),
+        }
+    } else {
+        String::new()
+    };
+
+    if removed > 0 || failed > 0 {
+        let detail = if is_archive(target) && scanned == 1 {
+            match lang {
+                Lang::Zh => format!("归档已解锁 · 安装/挂载后不再传播隔离属性 · {}", time),
+                Lang::En => format!("archive unlocked · no quarantine spread on install/mount · {}", time),
+            }
+        } else {
+            match lang {
+                Lang::Zh => format!("清除 {} 项 · 扫描 {} 项 · {}{}", removed, scanned, time, denied),
+                Lang::En => format!("stripped {} · scanned {} · {}{}", removed, scanned, time, denied),
+            }
+        };
+        if failed > 0 {
+            format!("  {} {:<44} {}", "!".yellow().bold(), target.display().to_string(), detail.yellow())
+        } else {
+            format!("  {} {:<44} {}", "✓".green().bold(), target.display().to_string(), detail.green())
+        }
+    } else {
+        let detail = match lang {
+            Lang::Zh => format!("无隔离属性 · 扫描 {} 项 · {}", scanned, time),
+            Lang::En => format!("clean · scanned {} · {}", scanned, time),
+        };
+        format!("  {} {:<44} {}", "·".dimmed(), target.display().to_string(), detail.dimmed())
+    }
+}
+
+fn permission_hint(lang: Lang, failed: usize) -> String {
+    match lang {
+        Lang::Zh => format!(
+            "⚠️  {} 项因系统权限 (App Management/TCC) 无法修改。请运行 {}，或在 系统设置 › 隐私与安全性 › App 管理 中允许终端 uq",
+            failed,
+            "sudo uq do".yellow().bold()
+        ),
+        Lang::En => format!(
+            "⚠️  {} item(s) blocked by system permissions (App Management/TCC). Run {} or allow uq under System Settings › Privacy & Security › App Management",
+            failed,
+            "sudo uq do".yellow().bold()
+        ),
+    }
+}
+
+fn format_elapsed(d: Duration) -> String {
+    let ms = d.as_millis();
+    if ms < 1000 {
+        format!("{}ms", ms)
+    } else {
+        format!("{:.2}s", d.as_secs_f64())
+    }
+}
+
+fn is_archive(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("dmg") | Some("pkg") | Some("zip") | Some("tar") | Some("gz") | Some("xip")
+    )
+}
+
+fn handle_do(paths: &[PathBuf], lang: Lang) {
+    let use_defaults = paths.is_empty();
+    let mut targets = if use_defaults { hot_dirs() } else { paths.to_vec() };
+    if use_defaults {
+        targets.retain(|p| p.exists());
+    }
+
+    println!();
+    let title = match lang {
+        Lang::Zh => "🧹 uq do · 手动清理隔离属性",
+        Lang::En => "🧹 uq do · Manual quarantine cleanup",
+    };
+    println!("{}", title.cyan().bold());
+    if use_defaults {
+        let hint = match lang {
+            Lang::Zh => "未指定路径，自动清理常用落地目录与已挂载镜像:",
+            Lang::En => "No path given, sweeping common locations and mounted images:",
+        };
+        println!("{}", hint.dimmed());
+    }
+    println!();
+
+    if targets.is_empty() {
+        let msg = match lang {
+            Lang::Zh => "没有可清理的目标目录。",
+            Lang::En => "Nothing to sweep.",
+        };
+        println!("{} {}", "=".blue(), msg);
+        return;
+    }
+
+    let started = Instant::now();
+    let mut scanned = 0;
+    let mut removed = 0;
+    let mut failed = 0;
+    for target in &targets {
+        let (s, r, f) = process_path(target, false, false, use_defaults, lang);
+        scanned += s;
+        removed += r;
+        failed += f;
+    }
+
+    println!("{}", "─".repeat(72).dimmed());
+    let summary = match lang {
+        Lang::Zh => format!(
+            "✅ 清理完成 · 目标 {} 个 · 扫描 {} 项 · 清除 {} 项 · 用时 {}",
+            targets.len(),
+            scanned,
+            removed,
+            format_elapsed(started.elapsed())
+        ),
+        Lang::En => format!(
+            "✅ Done · {} target(s) · scanned {} · stripped {} · {}",
+            targets.len(),
+            scanned,
+            removed,
+            format_elapsed(started.elapsed())
+        ),
+    };
+    if removed > 0 {
+        println!("{}", summary.green().bold());
+    } else {
+        println!("{}", summary.blue().bold());
+    }
+    if failed > 0 {
+        println!("{}", permission_hint(lang, failed));
+    }
+    println!();
+}
+
 
 fn handle_check(paths: &[PathBuf], lang: Lang) {
     for path in paths {
@@ -247,16 +461,84 @@ fn handle_check(paths: &[PathBuf], lang: Lang) {
     }
 }
 
+/// Real user home; `sudo uq do` must still sweep the invoking user's folders.
+fn home_dir() -> Option<PathBuf> {
+    if let Ok(user) = std::env::var("SUDO_USER") {
+        let p = PathBuf::from("/Users").join(user);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    dirs::home_dir()
+}
+
 fn default_watch_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(download_dir) = dirs::download_dir() {
-        dirs.push(download_dir);
+    if let Some(home) = home_dir() {
+        for d in [home.join("Downloads"), home.join("Desktop")] {
+            if d.is_dir() {
+                dirs.push(d);
+            }
+        }
     }
-    let app_dir = PathBuf::from("/Applications");
-    if app_dir.exists() {
-        dirs.push(app_dir);
+    for p in ["/Applications", "/Volumes", "/usr/local"] {
+        let p = PathBuf::from(p);
+        if p.exists() {
+            dirs.push(p);
+        }
     }
     dirs
+}
+
+/// Mount points of currently attached disk images (.dmg/.iso).
+fn mounted_image_volumes() -> Vec<PathBuf> {
+    let mut vols: Vec<PathBuf> = Vec::new();
+    if let Ok(out) = Command::new("hdiutil").arg("info").output() {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some(idx) = line.find("/Volumes/") {
+                let mp = PathBuf::from(line[idx..].trim_end());
+                if mp.is_dir() && !vols.contains(&mp) {
+                    vols.push(mp);
+                }
+            }
+        }
+    }
+    vols
+}
+
+/// Locations `uq do` sweeps when no path is given.
+fn hot_dirs() -> Vec<PathBuf> {
+    let mut dirs = default_watch_dirs();
+    dirs.retain(|d| d != Path::new("/Volumes"));
+    dirs.extend(mounted_image_volumes());
+    dirs
+}
+
+fn is_relevant_path(p: &Path) -> bool {
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if name.is_empty() || name.starts_with('.') {
+        return false;
+    }
+    !["download", "crdownload", "part", "partial", "tmp"]
+        .iter()
+        .any(|ext| name.ends_with(&format!(".{}", ext)))
+}
+
+/// Drops paths already covered by one of their ancestors (an app copy emits a path per file).
+fn collapse_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths.sort();
+    paths.dedup();
+    let mut collapsed: Vec<PathBuf> = Vec::new();
+    for p in paths {
+        if collapsed.iter().any(|kept| p.starts_with(kept)) {
+            continue;
+        }
+        collapsed.push(p);
+    }
+    collapsed
 }
 
 fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
@@ -280,6 +562,27 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
         println!("  -> {}", p.display().to_string().yellow());
     }
 
+    // Catch anything that landed while the watcher was not running.
+    let mut initial_removed = 0;
+    let mut initial_failed = 0;
+    for p in &watch_paths {
+        if p.exists() {
+            let (_, removed, failed) = sweep_fast(p, false);
+            initial_removed += removed;
+            initial_failed += failed;
+        }
+    }
+    if initial_removed > 0 {
+        let msg = match lang {
+            Lang::Zh => format!("{} [启动扫描] 补清 {} 项历史隔离属性", "+".green().bold(), initial_removed),
+            Lang::En => format!("{} [Startup Sweep] Cleaned {} leftover item(s)", "+".green().bold(), initial_removed),
+        };
+        println!("{}", msg);
+    }
+    if initial_failed > 0 {
+        println!("{}", permission_hint(lang, initial_failed));
+    }
+
     let (tx, rx) = channel();
     let mut watcher = RecommendedWatcher::new(
         move |res| {
@@ -297,45 +600,46 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
         }
     }
 
+    let mut pending: Vec<PathBuf> = Vec::new();
     loop {
-        match rx.recv() {
-            Ok(event) => match event.kind {
-                EventKind::Create(_) | EventKind::Modify(_) => {
-                    for path in event.paths {
-                        if !path.exists() {
-                            continue;
-                        }
-                        if let Some(ext) = path.extension() {
-                            if ext == "download" || ext == "crdownload" || ext == "part" {
-                                continue;
-                            }
-                        }
-                        let (_, removed) = process_path(&path, true, false, lang);
-                        if removed > 0 {
-                            let msg = match lang {
-                                Lang::Zh => format!(
-                                    "{} [自动清除] 已为 {} 移除 {} 个隔离属性",
-                                    "[+]".green().bold(),
-                                    path.display(),
-                                    removed
-                                ),
-                                Lang::En => format!(
-                                    "{} [Auto-Clean] Cleared {} quarantine attribute(s) from {}",
-                                    "[+]".green().bold(),
-                                    removed,
-                                    path.display()
-                                ),
-                            };
-                            println!("{}", msg);
-                        }
+        match rx.recv_timeout(DEBOUNCE) {
+            Ok(event) => {
+                if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+                    pending.extend(event.paths.into_iter().filter(|p| is_relevant_path(p)));
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                if pending.is_empty() {
+                    continue;
+                }
+                for path in collapse_paths(std::mem::take(&mut pending)) {
+                    if !path.exists() {
+                        continue;
+                    }
+                    let (_, removed, failed) = sweep(&path, false);
+                    if removed > 0 {
+                        let msg = match lang {
+                            Lang::Zh => format!(
+                                "{} [自动清除] 已为 {} 移除 {} 项隔离属性",
+                                "+".green().bold(),
+                                path.display(),
+                                removed
+                            ),
+                            Lang::En => format!(
+                                "{} [Auto-Clean] Cleared {} quarantine attribute(s) from {}",
+                                "+".green().bold(),
+                                removed,
+                                path.display()
+                            ),
+                        };
+                        println!("{}", msg);
+                    }
+                    if failed > 0 {
+                        println!("{}", permission_hint(lang, failed));
                     }
                 }
-                _ => {}
-            },
-            Err(e) => {
-                eprintln!("Watch error: {}", e);
-                break;
             }
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
 }
@@ -354,13 +658,13 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
 
     match action_matches.subcommand() {
         Some(("install", sub_m)) => {
-            let daemon = sub_m.get_flag("daemon");
+            let zero_memory = sub_m.get_flag("zero");
             let exe_path = get_current_exe();
             let parent_dir = plist_path.parent().unwrap();
             fs::create_dir_all(parent_dir).expect("Failed to create LaunchAgents directory");
 
             let watch_dirs = default_watch_dirs();
-            let plist_content = if daemon {
+            let plist_content = if !zero_memory {
                 format!(
                     r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -442,20 +746,25 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
                         Lang::En => format!("{} Launchd agent installed successfully!", "[+]".green().bold()),
                     };
                     println!("{}", success_msg);
-                    if daemon {
-                        let m = match lang {
-                            Lang::Zh => "运行模式: 持续常驻守护进程 (watch 模式)",
-                            Lang::En => "Mode: Persistent Daemon (watch mode)",
-                        };
-                        println!("{}", m);
-                    } else {
+                    if zero_memory {
                         let m1 = match lang {
-                            Lang::Zh => "运行模式: 零内存事件唤醒 (WatchPaths)",
-                            Lang::En => "Mode: Zero-Memory Event Trigger (WatchPaths)",
+                            Lang::Zh => "运行模式: 零内存事件唤醒 (WatchPaths，较慢)",
+                            Lang::En => "Mode: Zero-Memory Event Trigger (WatchPaths, slower)",
                         };
                         let m2 = match lang {
                             Lang::Zh => "空闲开销: 0 MB 内存, 0% CPU",
                             Lang::En => "Idle Footprint: 0 MB memory, 0% CPU",
+                        };
+                        println!("{}", m1);
+                        println!("{}", m2);
+                    } else {
+                        let m1 = match lang {
+                            Lang::Zh => "运行模式: FSEvents 实时守护 (毫秒级响应，约 350ms 内完成清理)",
+                            Lang::En => "Mode: Realtime FSEvents Daemon (cleanup within ~350ms)",
+                        };
+                        let m2 = match lang {
+                            Lang::Zh => "空闲开销: 约 7 MB 内存, 接近 0% CPU",
+                            Lang::En => "Idle Footprint: ~7 MB memory, ~0% CPU",
                         };
                         println!("{}", m1);
                         println!("{}", m2);
@@ -721,14 +1030,14 @@ fn show_dashboard(lang: Lang) {
                     mem,
                     cpu,
                     "< 0.05 W (极低功耗)".green().to_string(),
-                    "持续守护进程 (Daemon)".to_string(),
+                    "FSEvents 实时守护 (毫秒级触发)".to_string(),
                 ),
                 Lang::En => (
                     "🟢 RUNNING (Persistent Daemon)".green().bold().to_string(),
                     mem,
                     cpu,
                     "< 0.05 W (Ultra-low)".green().to_string(),
-                    "Persistent Daemon".to_string(),
+                    "Realtime FSEvents Daemon".to_string(),
                 ),
             }
         } else {
@@ -774,6 +1083,12 @@ fn show_dashboard(lang: Lang) {
         .collect::<Vec<_>>()
         .join(", ");
 
+    let size_text = std::env::current_exe()
+        .ok()
+        .and_then(|p| fs::metadata(p).ok())
+        .map(|m| format!("{:.0} KB (LTO + Strip)", m.len() as f64 / 1024.0))
+        .unwrap_or_else(|| "-".to_string());
+
     let (label_service, label_mode, label_status, label_dirs, label_logs, label_perf, label_mem, label_cpu, label_power, label_size, label_guide, label_more) = match lang {
         Lang::Zh => (
             "系统服务状态 (Launchd Service)",
@@ -814,18 +1129,20 @@ fn show_dashboard(lang: Lang) {
     println!("│  {:<12} {}", format!("{}:", label_mem), mem_text);
     println!("│  {:<12} {}", format!("{}:", label_cpu), cpu_text);
     println!("│  {:<12} {}", format!("{}:", label_power), power_text);
-    println!("│  {:<12} {}", format!("{}:", label_size), "~513 KB (LTO + Strip)".dimmed());
+    println!("│  {:<12} {}", format!("{}:", label_size), size_text.dimmed());
     println!("└─────────────────────────────────────────────────────────────\n");
 
     println!("{}", label_guide.bold());
     match lang {
         Lang::Zh => {
+            println!("  • 手动清理全部:  {}", "uq do".yellow());
             println!("  • 解除应用隔离:  {}", "uq /Applications/SomeApp.app".yellow());
             println!("  • 检查隔离属性:  {}", "uq check /Applications/SomeApp.app".yellow());
             println!("  • 后台日志追踪:  {}", "uq log -f".yellow());
             println!("  • 服务管理命令:  {}", "uq service [install|uninstall|status]".yellow());
         }
         Lang::En => {
+            println!("  • Manual sweep:      {}", "uq do".yellow());
             println!("  • Strip quarantine:  {}", "uq /Applications/SomeApp.app".yellow());
             println!("  • Check quarantine:  {}", "uq check /Applications/SomeApp.app".yellow());
             println!("  • Live log stream:   {}", "uq log -f".yellow());
@@ -865,8 +1182,15 @@ fn main() {
 
     // 3. Dispatch subcommands
     match matches.subcommand() {
+        Some(("do", sub_m)) => {
+            let paths: Vec<PathBuf> = sub_m
+                .get_many::<PathBuf>("PATH")
+                .map(|p| p.cloned().collect())
+                .unwrap_or_default();
+            handle_do(&paths, active_lang);
+        }
         Some(("check", sub_m)) => {
-            let paths: Vec<PathBuf> = sub_m.get_many::<PathBuf>("paths").unwrap().cloned().collect();
+            let paths: Vec<PathBuf> = sub_m.get_many::<PathBuf>("PATH").unwrap().cloned().collect();
             handle_check(&paths, active_lang);
         }
         Some(("watch", sub_m)) => {
@@ -897,30 +1221,16 @@ fn main() {
                 return;
             }
 
-            let mut total_s = 0;
-            let mut total_r = 0;
-            for p in &paths {
-                let (s, r) = process_path(p, quiet, verbose, active_lang);
-                total_s += s;
-                total_r += r;
+            if quiet {
+                for p in &paths {
+                    if p.exists() {
+                        sweep_fast(p, verbose);
+                    }
+                }
+                return;
             }
-            if !quiet && paths.len() > 1 {
-                let summary = match active_lang {
-                    Lang::Zh => format!(
-                        "{} 处理完毕。共扫描 {} 项，清除 {} 项的隔离属性。",
-                        "[*]".cyan().bold(),
-                        total_s,
-                        total_r
-                    ),
-                    Lang::En => format!(
-                        "{} Done. Processed {} items total, stripped quarantine from {}.",
-                        "[*]".cyan().bold(),
-                        total_s,
-                        total_r
-                    ),
-                };
-                println!("{}", summary);
-            }
+
+            handle_do(&paths, active_lang);
         }
     }
 }
