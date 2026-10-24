@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.8] - 2026-10-24
+
+### Changed
+- New logo: a flat dark app tile with an opened padlock and a check mark, replacing the neon gradient/glow artwork.
+
+### Fixed
+- Fast sweeps no longer skip clean plain containers under package install roots (`/usr/local`, `/opt`, `/Library`), so quarantined files installed into e.g. `/usr/local/bin` are cleaned; app bundles and mounted volumes are still skipped when clean, keeping `uq do` at ~10 ms.
+
 ## [0.1.7] - 2026-10-24
 
 ### Changed

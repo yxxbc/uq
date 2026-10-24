@@ -56,6 +56,13 @@ mod tests {
     }
 
     #[test]
+    fn skips_only_bundles_and_volumes_when_clean() {
+        assert!(skip_clean_subtree(Path::new("/Applications/Foo.app")));
+        assert!(skip_clean_subtree(Path::new("/Volumes/Some Image")));
+        assert!(!skip_clean_subtree(Path::new("/usr/local/bin")));
+    }
+
+    #[test]
     fn detects_archives() {
         assert!(is_archive(Path::new("/tmp/App.dmg")));
         assert!(is_archive(Path::new("/tmp/Tool.PKG")));
@@ -213,6 +220,12 @@ fn sweep_fast(target: &Path, verbose: bool) -> (usize, usize, usize) {
     };
     children.sort();
 
+    // pkg payloads (bin/lib trees under /usr/local, /opt, /Library) can hold
+    // quarantined files without a quarantined parent directory.
+    let probe_payloads = ["/usr/local", "/opt", "/Library"]
+        .iter()
+        .any(|p| target.starts_with(p));
+
     let mut scanned = 0;
     let mut removed = 0;
     let mut failed = 0;
@@ -240,11 +253,27 @@ fn sweep_fast(target: &Path, verbose: bool) -> (usize, usize, usize) {
             scanned += s;
             removed += r;
             failed += f;
-        } else {
+        } else if !probe_payloads || skip_clean_subtree(&child) {
             scanned += 1;
+        } else {
+            let (s, r, f) = sweep(&child, verbose);
+            scanned += s;
+            removed += r;
+            failed += f;
         }
     }
     (scanned, removed, failed)
+}
+
+/// Only bundles and mounted volumes are assumed to be quarantined uniformly,
+/// so a clean one can be skipped instead of walking its whole tree.
+fn skip_clean_subtree(path: &Path) -> bool {
+    let is_bundle = path
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("app"))
+        .unwrap_or(false);
+    let is_volume = path.parent() == Some(Path::new("/Volumes"));
+    is_bundle || is_volume
 }
 
 /// Strips quarantine from `target` and everything below it.
