@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.10] - 2026-10-24
+
+### Added
+- Cleanup log records now capture when, which software, how many items, the download source and the full path, e.g. `2026-10-24 21:02:08 [完成] Demo.app · 解除 24 项 · 来源 Homebrew Cask · /Applications/Demo.app`.
+- The software name is resolved to the outermost `.app` / `.pkg` / `.dmg` / `.xip` bundle, so paths deep inside a bundle still report the app they belong to.
+- The download source is read from the quarantine value's agent field (Safari, Chrome, Homebrew Cask, ...) when macOS recorded it.
+
+### Changed
+- Sweeps return a single `SweepStats` value, so the download source is captured atomically with the removal instead of a separate probe that could race the copy still writing attributes.
+
 ## [0.1.9] - 2026-10-24
 
 ### Added

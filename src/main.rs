@@ -63,6 +63,59 @@ mod tests {
     }
 
     #[test]
+    fn formats_local_timestamp() {
+        let ts = timestamp();
+        assert_eq!(ts.len(), 19, "unexpected timestamp: {ts}");
+        assert_eq!(&ts[4..5], "-");
+        assert_eq!(&ts[13..14], ":");
+    }
+
+    #[test]
+    fn sweep_reports_origin_from_the_removed_value() {
+        let dir = std::env::temp_dir().join("uq-sweep-origin");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("Demo.app/Contents")).unwrap();
+        fs::write(dir.join("Demo.app/Contents/bin"), b"x").unwrap();
+        fs::write(dir.join("Installer.pkg"), b"x").unwrap();
+        for f in ["Demo.app/Contents/bin", "Installer.pkg"] {
+            xattr::set(dir.join(f), QUARANTINE_ATTR, b"0083;68a1b2c3;Safari;ABC").unwrap();
+        }
+        let pkg = sweep(&dir.join("Installer.pkg"), false, true);
+        assert_eq!(pkg.removed, 1);
+        assert_eq!(pkg.origin.as_deref(), Some("Safari"));
+        let bundle = sweep(&dir.join("Demo.app"), false, true);
+        assert_eq!(bundle.removed, 1);
+        assert_eq!(bundle.origin.as_deref(), Some("Safari"));
+        let fast = sweep_fast(&dir, false, true);
+        assert_eq!(fast.removed, 2);
+        assert_eq!(fast.origin.as_deref(), Some("Safari"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parses_download_agent_from_quarantine_value() {
+        assert_eq!(
+            agent_from_value("01c1;6a963d68;Homebrew Cask;911E1CFD-A9BE-48BA-89FE-2302F0866214")
+                .as_deref(),
+            Some("Homebrew Cask")
+        );
+        assert_eq!(agent_from_value("0083;68a1b2c3;Safari;ABC").as_deref(), Some("Safari"));
+        assert_eq!(agent_from_value("0083;68a1b2c3;;ABC"), None);
+        assert_eq!(agent_from_value("broken"), None);
+    }
+
+    #[test]
+    fn labels_bundles_by_their_app_name() {
+        assert_eq!(app_label(Path::new("/Applications/Foo.app")), "Foo.app");
+        assert_eq!(
+            app_label(Path::new("/Applications/Foo.app/Contents/MacOS/foo")),
+            "Foo.app"
+        );
+        assert_eq!(app_label(Path::new("/Users/x/Downloads/App.dmg")), "App.dmg");
+        assert_eq!(app_label(Path::new("/tmp/plain.txt")), "plain.txt");
+    }
+
+    #[test]
     fn detects_archives() {
         assert!(is_archive(Path::new("/tmp/App.dmg")));
         assert!(is_archive(Path::new("/tmp/Tool.PKG")));
@@ -177,15 +230,46 @@ fn build_cli(msg: &Messages) -> clap::Command {
         .after_help(msg.after_help())
 }
 
-/// Removes `com.apple.quarantine` from `path` (or only reports it in dry-run mode).
-fn remove_quarantine(path: &Path, dry_run: bool) -> Result<bool, std::io::Error> {
-    if xattr::get(path, QUARANTINE_ATTR)?.is_some() {
-        if !dry_run {
-            xattr::remove(path, QUARANTINE_ATTR)?;
+#[derive(Default)]
+struct SweepStats {
+    scanned: usize,
+    removed: usize,
+    failed: usize,
+    /// Download agent of the first quarantined item ("Safari", "Homebrew Cask", ...)
+    origin: Option<String>,
+}
+
+impl std::ops::AddAssign for SweepStats {
+    fn add_assign(&mut self, other: Self) {
+        self.scanned += other.scanned;
+        self.removed += other.removed;
+        self.failed += other.failed;
+        if self.origin.is_none() {
+            self.origin = other.origin;
         }
-        Ok(true)
+    }
+}
+
+/// Strips `com.apple.quarantine` from `path` and returns the raw value it had.
+fn strip_if_quarantined(path: &Path, dry_run: bool) -> Result<Option<String>, std::io::Error> {
+    match xattr::get(path, QUARANTINE_ATTR)? {
+        Some(value) => {
+            if !dry_run {
+                xattr::remove(path, QUARANTINE_ATTR)?;
+            }
+            Ok(Some(String::from_utf8_lossy(&value).to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Download agent recorded in a quarantine value: `flags;timestamp;agent;uuid`.
+fn agent_from_value(raw: &str) -> Option<String> {
+    let agent = raw.split(';').nth(2)?.trim();
+    if agent.is_empty() {
+        None
     } else {
-        Ok(false)
+        Some(agent.to_string())
     }
 }
 
@@ -196,7 +280,7 @@ fn process_path(
     fast: bool,
     lang: Lang,
     dry_run: bool,
-) -> (usize, usize, usize) {
+) -> SweepStats {
     if !target.exists() {
         if !quiet {
             let err_msg = match lang {
@@ -205,11 +289,11 @@ fn process_path(
             };
             eprintln!("{}", err_msg);
         }
-        return (0, 0, 0);
+        return SweepStats::default();
     }
 
     let started = Instant::now();
-    let (scanned, removed, failed) = if fast {
+    let stats = if fast {
         sweep_fast(target, verbose && !quiet, dry_run)
     } else {
         sweep(target, verbose && !quiet, dry_run)
@@ -217,16 +301,24 @@ fn process_path(
     if !quiet {
         println!(
             "{}",
-            result_line(lang, target, scanned, removed, failed, dry_run, started.elapsed())
+            result_line(
+                lang,
+                target,
+                stats.scanned,
+                stats.removed,
+                stats.failed,
+                dry_run,
+                started.elapsed()
+            )
         );
     }
-    (scanned, removed, failed)
+    stats
 }
 
 /// Fast sweep for container dirs (~/Downloads, /Applications, mounted images).
-/// macOS applies quarantine uniformly to a downloaded item, so an item whose root is
+/// macOS applies quarantine uniformly to a downloaded item, so a bundle whose root is
 /// clean is skipped instead of walking its whole tree (~99 top-level items instead of 780k).
-fn sweep_fast(target: &Path, verbose: bool, dry_run: bool) -> (usize, usize, usize) {
+fn sweep_fast(target: &Path, verbose: bool, dry_run: bool) -> SweepStats {
     if !target.is_dir() {
         return sweep(target, verbose, dry_run);
     }
@@ -243,43 +335,34 @@ fn sweep_fast(target: &Path, verbose: bool, dry_run: bool) -> (usize, usize, usi
         .iter()
         .any(|p| target.starts_with(p));
 
-    let mut scanned = 0;
-    let mut removed = 0;
-    let mut failed = 0;
+    let mut stats = SweepStats::default();
     for child in children {
-        let quarantined = matches!(xattr::get(&child, QUARANTINE_ATTR), Ok(Some(_)));
-        if quarantined {
-            match remove_quarantine(&child, dry_run) {
-                Ok(_) => {
-                    let (s, r, f) = sweep(&child, verbose, dry_run);
-                    scanned += s;
-                    removed += r + 1;
-                    failed += f;
+        match strip_if_quarantined(&child, dry_run) {
+            Ok(Some(value)) => {
+                stats.scanned += 1;
+                stats.removed += 1;
+                if stats.origin.is_none() {
+                    stats.origin = agent_from_value(&value);
                 }
+                if verbose {
+                    println!("    {} {}", "✓".green(), child.display());
+                }
+                stats += sweep(&child, verbose, dry_run);
+            }
+            Ok(None) if !child.is_dir() => stats += sweep(&child, verbose, dry_run),
+            Ok(None) if !probe_payloads || skip_clean_subtree(&child) => stats.scanned += 1,
+            Ok(None) => stats += sweep(&child, verbose, dry_run),
+            Err(_) => {
                 // App Management/TCC blocks the whole bundle, walking it would only fail again.
-                Err(_) => {
-                    scanned += 1;
-                    failed += 1;
-                    if verbose {
-                        println!("    {} {} (permission denied)", "✗".red(), child.display());
-                    }
+                stats.scanned += 1;
+                stats.failed += 1;
+                if verbose {
+                    println!("    {} {} (permission denied)", "✗".red(), child.display());
                 }
             }
-        } else if !child.is_dir() {
-            let (s, r, f) = sweep(&child, verbose, dry_run);
-            scanned += s;
-            removed += r;
-            failed += f;
-        } else if !probe_payloads || skip_clean_subtree(&child) {
-            scanned += 1;
-        } else {
-            let (s, r, f) = sweep(&child, verbose, dry_run);
-            scanned += s;
-            removed += r;
-            failed += f;
         }
     }
-    (scanned, removed, failed)
+    stats
 }
 
 /// Only bundles and mounted volumes are assumed to be quarantined uniformly,
@@ -294,25 +377,25 @@ fn skip_clean_subtree(path: &Path) -> bool {
 }
 
 /// Strips quarantine from `target` and everything below it.
-/// Returns (scanned, removed, failed).
-fn sweep(target: &Path, verbose: bool, dry_run: bool) -> (usize, usize, usize) {
-    let mut scanned = 0;
-    let mut removed = 0;
-    let mut failed = 0;
+fn sweep(target: &Path, verbose: bool, dry_run: bool) -> SweepStats {
+    let mut stats = SweepStats::default();
 
     for entry in WalkDir::new(target).follow_links(false).into_iter().filter_map(|e| e.ok()) {
         let p = entry.path();
-        scanned += 1;
-        match remove_quarantine(p, dry_run) {
-            Ok(true) => {
-                removed += 1;
+        stats.scanned += 1;
+        match strip_if_quarantined(p, dry_run) {
+            Ok(Some(value)) => {
+                stats.removed += 1;
+                if stats.origin.is_none() {
+                    stats.origin = agent_from_value(&value);
+                }
                 if verbose {
                     println!("    {} {}", "✓".green(), p.display());
                 }
             }
-            Ok(false) => {}
+            Ok(None) => {}
             Err(e) => {
-                failed += 1;
+                stats.failed += 1;
                 if verbose {
                     println!("    {} {} ({})", "✗".red(), p.display(), e);
                 }
@@ -320,7 +403,7 @@ fn sweep(target: &Path, verbose: bool, dry_run: bool) -> (usize, usize, usize) {
         }
     }
 
-    (scanned, removed, failed)
+    stats
 }
 
 fn result_line(
@@ -535,6 +618,87 @@ fn log_hint(text: String) {
     println!("  {}", text.dimmed());
 }
 
+/// Local wall-clock timestamp for log lines: 2026-10-24 20:31:07
+fn timestamp() -> String {
+    let mut buf = [0i8; 32];
+    unsafe {
+        let now = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&now, &mut tm).is_null() {
+            return String::new();
+        }
+        libc::strftime(
+            buf.as_mut_ptr(),
+            buf.len(),
+            c"%Y-%m-%d %H:%M:%S".as_ptr(),
+            &tm,
+        );
+        std::ffi::CStr::from_ptr(buf.as_ptr())
+            .to_string_lossy()
+            .to_string()
+    }
+}
+
+/// Outermost bundle (.app/.pkg/.dmg/.xip) containing `path`, if any.
+fn bundle_root(path: &Path) -> Option<&Path> {
+    let mut found = None;
+    for ancestor in path.ancestors() {
+        if let Some(ext) = ancestor.extension() {
+            let ext = ext.to_string_lossy();
+            if [".app", ".pkg", ".dmg", ".xip"]
+                .iter()
+                .any(|e| ext.eq_ignore_ascii_case(&e[1..]))
+            {
+                found = Some(ancestor);
+            }
+        }
+    }
+    found
+}
+
+/// Human name of the software being cleaned (bundle name, file name or path).
+fn app_label(path: &Path) -> String {
+    bundle_root(path)
+        .and_then(|p| p.file_name())
+        .or_else(|| path.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// One log record per cleanup: when · what software · how many · download source · where.
+fn log_event(lang: Lang, target: &Path, removed: usize, origin: Option<String>) {
+    let count = match lang {
+        Lang::Zh => format!("解除 {} 项", removed),
+        Lang::En => format!("stripped {}", removed),
+    };
+    let mut parts = vec![count];
+    if let Some(agent) = origin {
+        parts.push(match lang {
+            Lang::Zh => format!("来源 {}", agent),
+            Lang::En => format!("from {}", agent),
+        });
+    }
+    parts.push(target.display().to_string());
+    println!(
+        "{} {} {} · {}",
+        timestamp().dimmed(),
+        "[完成]".green().bold(),
+        app_label(target).bold(),
+        parts.join(" · ")
+    );
+}
+
+/// Same as `log_event` but for a warning (permission failures etc.).
+fn log_warn_event(lang: Lang, target: &Path, failed: usize) {
+    println!(
+        "{} {} {}",
+        timestamp().dimmed(),
+        "[警告]".yellow(),
+        permission_hint(lang, failed)
+    );
+    let _ = target;
+}
+
 fn is_archive(path: &Path) -> bool {
     matches!(
         path.extension()
@@ -592,13 +756,11 @@ fn handle_do(paths: &[PathBuf], lang: Lang, verbose: bool, dry_run: bool) {
     );
 
     let started = Instant::now();
-    let (mut scanned, mut removed, mut failed) = (0, 0, 0);
+    let mut totals = SweepStats::default();
     for target in &targets {
-        let (s, r, f) = process_path(target, false, verbose, use_defaults, lang, dry_run);
-        scanned += s;
-        removed += r;
-        failed += f;
+        totals += process_path(target, false, verbose, use_defaults, lang, dry_run);
     }
+    let (scanned, removed, failed) = (totals.scanned, totals.removed, totals.failed);
 
     let summary = match (lang, dry_run) {
         (Lang::Zh, true) => format!(
@@ -811,23 +973,21 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
         Some(truncate(&monitored, 100)),
     );
 
-    let mut initial_removed = 0;
-    let mut initial_failed = 0;
+    let mut initial = SweepStats::default();
     for p in &watch_paths {
         if p.exists() {
-            let (_, removed, failed) = sweep_fast(p, false, false);
-            initial_removed += removed;
-            initial_failed += failed;
+            initial += sweep_fast(p, false, false);
         }
     }
+    let (initial_removed, initial_failed) = (initial.removed, initial.failed);
     if initial_removed > 0 || initial_failed > 0 {
         println!(
-            "  {}",
+            "{} {}",
+            timestamp().dimmed(),
             match lang {
-                Lang::Zh => format!("解除 {} 项 · 失败 {} 项", initial_removed, initial_failed),
-                Lang::En => format!("stripped {} · failed {}", initial_removed, initial_failed),
+                Lang::Zh => format!("[完成] 启动补扫 · 解除 {} 项 · 失败 {} 项", initial_removed, initial_failed),
+                Lang::En => format!("[完成] startup sweep · stripped {} · failed {}", initial_removed, initial_failed),
             }
-            .dimmed()
         );
     }
 
@@ -882,17 +1042,12 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
                     if !path.exists() {
                         continue;
                     }
-                    let (_, removed, failed) = sweep(&path, false, false);
-                    if removed > 0 {
-                        println!(
-                            "{} {} 解除 {} 项",
-                            "[完成]".green().bold(),
-                            path.display(),
-                            removed
-                        );
+                    let stats = sweep(&path, false, false);
+                    if stats.removed > 0 {
+                        log_event(lang, &path, stats.removed, stats.origin);
                     }
-                    if failed > 0 {
-                        log_warn(permission_hint(lang, failed));
+                    if stats.failed > 0 {
+                        log_warn_event(lang, &path, stats.failed);
                     }
                 }
             }
@@ -1513,7 +1668,7 @@ fn main() {
             if quiet {
                 for p in &paths {
                     if p.exists() {
-                        sweep_fast(p, verbose, false);
+                        let _ = sweep_fast(p, verbose, false);
                     }
                 }
                 return;
@@ -1523,3 +1678,4 @@ fn main() {
         }
     }
 }
+

@@ -108,7 +108,8 @@ uq /Applications/SomeApp.app
 # Check quarantine attributes and origin metadata
 uq check /Applications/SomeApp.app
 
-# Live stream service logs
+# Live stream service logs (each line: time · app · count · download source · full path)
+# e.g. 2026-10-24 21:02:08 [完成] Demo.app · 解除 24 项 · 来源 Homebrew Cask · /Applications/Demo.app
 uq log -f
 
 # View last 20 log entries

@@ -108,7 +108,8 @@ uq /Applications/SomeApp.app
 # 检查目标是否携带隔离属性及来源信息
 uq check /Applications/SomeApp.app
 
-# 实时查看后台自动解除日志
+# 实时查看后台自动解除日志（每条记录：时间 · 软件 · 项数 · 下载来源 · 完整路径）
+# 例：2026-10-24 21:02:08 [完成] Demo.app · 解除 24 项 · 来源 Homebrew Cask · /Applications/Demo.app
 uq log -f
 
 # 查看最近 20 条日志
