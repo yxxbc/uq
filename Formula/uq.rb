@@ -9,12 +9,12 @@ class Uq < Formula
   on_macos do
     on_arm do
       url "https://github.com/yxxbc/uq/releases/download/v0.1.5/uq-v0.1.5-macos-arm64.tar.gz"
-      sha256 "REFRESH_AFTER_RELEASE"
+      sha256 "600b79b87fabf9a436ddb7f61b0a70738156d1a11217d86210aebe3157af1467"
     end
 
     on_intel do
       url "https://github.com/yxxbc/uq/releases/download/v0.1.5/uq-v0.1.5-macos-x86_64.tar.gz"
-      sha256 "REFRESH_AFTER_RELEASE"
+      sha256 "a810f7c1d49e586ea4de09ee4a00c47ccf80edb273b50e2c0986fbd247471ee8"
     end
   end
 

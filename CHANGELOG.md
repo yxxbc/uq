@@ -23,7 +23,7 @@ All notable changes to this project will be documented in this file.
 ### Release
 - `scripts/sync_release_version.py` now also keeps `install.sh` `VERSION` aligned with `Cargo.toml`.
 - `Formula/uq.rb` now ships both Apple Silicon (`arm64`) and Intel (`x86_64`) prebuilt archives instead of rejecting Intel Macs.
-- After tagging `v0.1.5`, run `python3 scripts/sync_release_version.py --fetch-hashes` to fill both architecture checksums from the published archives.
+- Both architecture checksums in `Formula/uq.rb` were filled from the published `v0.1.5` archives with `python3 scripts/sync_release_version.py --fetch-hashes` (run this after every tag).
 
 ## [0.1.4] - 2026-10-02
 
