@@ -6,6 +6,7 @@ const HELP_ZH: &str = "\
   uq                    查看服务状态与资源开销
   uq do                 手动清理常用目录（~/Downloads、桌面、/Applications、/usr/local、已挂载镜像）
   uq do <路径>          清理指定目标，支持 .app / .dmg / .pkg
+  uq do -n             预演：先看清会被清理哪些内容（配合 -v 列出每个文件）
   uq check <路径>       查看隔离属性及其来源
   uq log [-f|-c]        查看 / 跟踪 / 清空后台日志
   uq service <动作>     安装（默认 FSEvents 守护）、卸载、查看状态
@@ -25,6 +26,7 @@ Everyday use
   uq                    Show service state and resource usage
   uq do                 Manual sweep (~/Downloads, Desktop, /Applications, /usr/local, mounted images)
   uq do <path>          Clean a specific target, including .app / .dmg / .pkg
+  uq do -n             Dry run: preview what would be cleaned (-v lists every file)
   uq check <path>       Show quarantine attributes and their origin
   uq log [-f|-c]        View / follow / clear service logs
   uq service <action>   Install (realtime FSEvents daemon by default), uninstall, status
@@ -198,6 +200,13 @@ impl Messages {
         match self.lang {
             Lang::Zh => "手动清理隔离属性（.dmg/.pkg 归档与已安装应用均可）",
             Lang::En => "Manually strip quarantine (archives like .dmg/.pkg and installed apps)",
+        }
+    }
+
+    pub fn arg_dry_run(&self) -> &'static str {
+        match self.lang {
+            Lang::Zh => "预演：只列出会被解除隔离属性的内容，不做任何修改",
+            Lang::En => "Dry run: list what would be unquarantined without changing anything",
         }
     }
 

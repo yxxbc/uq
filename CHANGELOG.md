@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.9] - 2026-10-24
+
+### Added
+- `uq do -n/--dry-run` previews what would be unquarantined without modifying anything; combine with `-v` to list every affected path.
+- `-q/--quiet`, `-v/--verbose` and `-l/--lang` are now global flags, so `uq do -v` works as expected.
+- README now documents exactly what uq changes (only `com.apple.quarantine`), and that it never touches SIP, TCC, permissions, signatures or the network.
+
+### Changed
+- Dry-run output reports "would strip N" instead of "stripped N".
+
 ## [0.1.8] - 2026-10-24
 
 ### Changed

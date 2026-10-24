@@ -99,6 +99,7 @@ uq
 
 # 一键手动清理（无参数时清理 ~/Downloads、桌面、/Applications、/usr/local 与已挂载镜像）
 uq do
+uq do -n               # 预演：先看清会被清理什么（配合 -v 列出每个文件）
 
 # 手动清理指定对象（.dmg / .pkg / .app / 任意文件均可）
 uq do ~/Downloads/SomeApp.dmg
@@ -128,6 +129,26 @@ uq lang en
 
 # 查看完整命令行帮助
 uq --help
+```
+
+---
+
+## uq 到底改了什么（安全说明）
+
+uq 只做一件事：删除文件的扩展属性 `com.apple.quarantine`。
+
+- **只删这一个属性**：不动 `com.apple.provenance`、`com.apple.macl` 等其他属性，不动文件内容、权限、所有者，也不改代码签名。
+- **不碰系统防护**：不关闭 SIP、不改 Gatekeeper 全局开关、不修改 TCC（隐私权限）、不增加任何沙盒/网络/辅助功能授权。
+- **不联网**：uq 没有任何网络代码，不会上传路径、日志或任何信息（源码里只有 `xattr`、`walkdir`、`launchctl`、`hdiutil`、`ps`、`tail` 这些本地调用）。
+- **不跟随软链接**：递归时 `follow_links(false)`，不会因为某个软链接而越界修改其他位置。
+- **会改变的只有一件事**：被清理过的应用/文件在首次打开时不再弹「已损坏 / 无法验证开发者」的隔离提示——这正是本工具的目的。
+
+想先看清楚再动手：
+
+```bash
+uq do -n        # 预演：只统计会被清理的内容，不做修改
+uq do -n -v     # 预演 + 列出每一个会被清理的文件路径
+uq check /Applications/SomeApp.app   # 查看某个目标当前的隔离属性及来源
 ```
 
 ---

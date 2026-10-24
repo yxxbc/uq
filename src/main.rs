@@ -86,12 +86,14 @@ fn build_cli(msg: &Messages) -> clap::Command {
         .arg(
             arg!(-q --quiet)
                 .help(msg.arg_quiet())
-                .action(ArgAction::SetTrue),
+                .action(ArgAction::SetTrue)
+                .global(true),
         )
         .arg(
             arg!(-v --verbose)
                 .help(msg.arg_verbose())
-                .action(ArgAction::SetTrue),
+                .action(ArgAction::SetTrue)
+                .global(true),
         )
         .arg(
             arg!(-l --lang <LANG>)
@@ -105,6 +107,11 @@ fn build_cli(msg: &Messages) -> clap::Command {
                     arg!([PATH] ... "paths")
                         .help(msg.arg_do_paths())
                         .value_parser(value_parser!(PathBuf)),
+                )
+                .arg(
+                    arg!(-n --"dry-run")
+                        .help(msg.arg_dry_run())
+                        .action(ArgAction::SetTrue),
                 ),
         )
         .subcommand(
@@ -170,16 +177,26 @@ fn build_cli(msg: &Messages) -> clap::Command {
         .after_help(msg.after_help())
 }
 
-fn remove_quarantine(path: &Path) -> Result<bool, std::io::Error> {
-    if let Some(_) = xattr::get(path, QUARANTINE_ATTR)? {
-        xattr::remove(path, QUARANTINE_ATTR)?;
+/// Removes `com.apple.quarantine` from `path` (or only reports it in dry-run mode).
+fn remove_quarantine(path: &Path, dry_run: bool) -> Result<bool, std::io::Error> {
+    if xattr::get(path, QUARANTINE_ATTR)?.is_some() {
+        if !dry_run {
+            xattr::remove(path, QUARANTINE_ATTR)?;
+        }
         Ok(true)
     } else {
         Ok(false)
     }
 }
 
-fn process_path(target: &Path, quiet: bool, verbose: bool, fast: bool, lang: Lang) -> (usize, usize, usize) {
+fn process_path(
+    target: &Path,
+    quiet: bool,
+    verbose: bool,
+    fast: bool,
+    lang: Lang,
+    dry_run: bool,
+) -> (usize, usize, usize) {
     if !target.exists() {
         if !quiet {
             let err_msg = match lang {
@@ -193,14 +210,14 @@ fn process_path(target: &Path, quiet: bool, verbose: bool, fast: bool, lang: Lan
 
     let started = Instant::now();
     let (scanned, removed, failed) = if fast {
-        sweep_fast(target, verbose && !quiet)
+        sweep_fast(target, verbose && !quiet, dry_run)
     } else {
-        sweep(target, verbose && !quiet)
+        sweep(target, verbose && !quiet, dry_run)
     };
     if !quiet {
         println!(
             "{}",
-            result_line(lang, target, scanned, removed, failed, started.elapsed())
+            result_line(lang, target, scanned, removed, failed, dry_run, started.elapsed())
         );
     }
     (scanned, removed, failed)
@@ -209,14 +226,14 @@ fn process_path(target: &Path, quiet: bool, verbose: bool, fast: bool, lang: Lan
 /// Fast sweep for container dirs (~/Downloads, /Applications, mounted images).
 /// macOS applies quarantine uniformly to a downloaded item, so an item whose root is
 /// clean is skipped instead of walking its whole tree (~99 top-level items instead of 780k).
-fn sweep_fast(target: &Path, verbose: bool) -> (usize, usize, usize) {
+fn sweep_fast(target: &Path, verbose: bool, dry_run: bool) -> (usize, usize, usize) {
     if !target.is_dir() {
-        return sweep(target, verbose);
+        return sweep(target, verbose, dry_run);
     }
 
     let mut children: Vec<PathBuf> = match fs::read_dir(target) {
         Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
-        Err(_) => return sweep(target, verbose),
+        Err(_) => return sweep(target, verbose, dry_run),
     };
     children.sort();
 
@@ -232,9 +249,9 @@ fn sweep_fast(target: &Path, verbose: bool) -> (usize, usize, usize) {
     for child in children {
         let quarantined = matches!(xattr::get(&child, QUARANTINE_ATTR), Ok(Some(_)));
         if quarantined {
-            match remove_quarantine(&child) {
+            match remove_quarantine(&child, dry_run) {
                 Ok(_) => {
-                    let (s, r, f) = sweep(&child, verbose);
+                    let (s, r, f) = sweep(&child, verbose, dry_run);
                     scanned += s;
                     removed += r + 1;
                     failed += f;
@@ -249,14 +266,14 @@ fn sweep_fast(target: &Path, verbose: bool) -> (usize, usize, usize) {
                 }
             }
         } else if !child.is_dir() {
-            let (s, r, f) = sweep(&child, verbose);
+            let (s, r, f) = sweep(&child, verbose, dry_run);
             scanned += s;
             removed += r;
             failed += f;
         } else if !probe_payloads || skip_clean_subtree(&child) {
             scanned += 1;
         } else {
-            let (s, r, f) = sweep(&child, verbose);
+            let (s, r, f) = sweep(&child, verbose, dry_run);
             scanned += s;
             removed += r;
             failed += f;
@@ -278,7 +295,7 @@ fn skip_clean_subtree(path: &Path) -> bool {
 
 /// Strips quarantine from `target` and everything below it.
 /// Returns (scanned, removed, failed).
-fn sweep(target: &Path, verbose: bool) -> (usize, usize, usize) {
+fn sweep(target: &Path, verbose: bool, dry_run: bool) -> (usize, usize, usize) {
     let mut scanned = 0;
     let mut removed = 0;
     let mut failed = 0;
@@ -286,7 +303,7 @@ fn sweep(target: &Path, verbose: bool) -> (usize, usize, usize) {
     for entry in WalkDir::new(target).follow_links(false).into_iter().filter_map(|e| e.ok()) {
         let p = entry.path();
         scanned += 1;
-        match remove_quarantine(p) {
+        match remove_quarantine(p, dry_run) {
             Ok(true) => {
                 removed += 1;
                 if verbose {
@@ -312,6 +329,7 @@ fn result_line(
     scanned: usize,
     removed: usize,
     failed: usize,
+    dry_run: bool,
     elapsed: Duration,
 ) -> String {
     let time = format_elapsed(elapsed);
@@ -331,9 +349,11 @@ fn result_line(
                 Lang::En => format!("archive unlocked · no quarantine spread on install/mount · {}", time),
             }
         } else {
-            match lang {
-                Lang::Zh => format!("清除 {} 项 · 扫描 {} 项 · {}{}", removed, scanned, time, denied),
-                Lang::En => format!("stripped {} · scanned {} · {}{}", removed, scanned, time, denied),
+            match (lang, dry_run) {
+                (Lang::Zh, true) => format!("可解除 {} 项 · 扫描 {} 项 · {}{}", removed, scanned, time, denied),
+                (Lang::Zh, false) => format!("清除 {} 项 · 扫描 {} 项 · {}{}", removed, scanned, time, denied),
+                (Lang::En, true) => format!("would strip {} · scanned {} · {}{}", removed, scanned, time, denied),
+                (Lang::En, false) => format!("stripped {} · scanned {} · {}{}", removed, scanned, time, denied),
             }
         };
         let path_cell = pad_end(&truncate(&target.display().to_string(), 44), 44);
@@ -525,7 +545,7 @@ fn is_archive(path: &Path) -> bool {
     )
 }
 
-fn handle_do(paths: &[PathBuf], lang: Lang) {
+fn handle_do(paths: &[PathBuf], lang: Lang, verbose: bool, dry_run: bool) {
     let use_defaults = paths.is_empty();
     let mut targets = if use_defaults { hot_dirs() } else { paths.to_vec() };
     if use_defaults {
@@ -534,8 +554,16 @@ fn handle_do(paths: &[PathBuf], lang: Lang) {
 
     log_intro(
         match lang {
-            Lang::Zh => "uq：手动解除隔离属性（忘了用法就运行 uq help）",
-            Lang::En => "uq: strip quarantine manually (run uq help if unsure)",
+            Lang::Zh => if dry_run {
+                "uq：预演模式，只列出将被解除隔离属性的目录，不会修改任何文件（去掉 -n 才会真正执行）"
+            } else {
+                "uq：手动解除隔离属性（忘了用法就运行 uq help）"
+            },
+            Lang::En => if dry_run {
+                "uq: dry run, lists what would be unquarantined and changes nothing (drop -n to apply)"
+            } else {
+                "uq: strip quarantine manually (run uq help if unsure)"
+            },
         }
         .to_string(),
     );
@@ -554,9 +582,11 @@ fn handle_do(paths: &[PathBuf], lang: Lang) {
         .collect::<Vec<_>>()
         .join(" ");
     log_action(
-        match lang {
-            Lang::Zh => "扫描并解除隔离属性",
-            Lang::En => "Scan and strip quarantine",
+        match (lang, dry_run) {
+            (Lang::Zh, true) => "扫描（预演，不修改）",
+            (Lang::Zh, false) => "扫描并解除隔离属性",
+            (Lang::En, true) => "Scan (dry run, no changes)",
+            (Lang::En, false) => "Scan and strip quarantine",
         },
         Some(truncate(&target_list, 100)),
     );
@@ -564,21 +594,35 @@ fn handle_do(paths: &[PathBuf], lang: Lang) {
     let started = Instant::now();
     let (mut scanned, mut removed, mut failed) = (0, 0, 0);
     for target in &targets {
-        let (s, r, f) = process_path(target, false, false, use_defaults, lang);
+        let (s, r, f) = process_path(target, false, verbose, use_defaults, lang, dry_run);
         scanned += s;
         removed += r;
         failed += f;
     }
 
-    let summary = match lang {
-        Lang::Zh => format!(
+    let summary = match (lang, dry_run) {
+        (Lang::Zh, true) => format!(
+            "{} 个目标 · 扫描 {} 项 · 将解除 {} 项 · 用时 {}（未修改）",
+            targets.len(),
+            scanned,
+            removed,
+            format_elapsed(started.elapsed())
+        ),
+        (Lang::Zh, false) => format!(
             "{} 个目标 · 扫描 {} 项 · 解除 {} 项 · 用时 {}",
             targets.len(),
             scanned,
             removed,
             format_elapsed(started.elapsed())
         ),
-        Lang::En => format!(
+        (Lang::En, true) => format!(
+            "{} target(s) · scanned {} · would strip {} · {} (nothing changed)",
+            targets.len(),
+            scanned,
+            removed,
+            format_elapsed(started.elapsed())
+        ),
+        (Lang::En, false) => format!(
             "{} target(s) · scanned {} · stripped {} · {}",
             targets.len(),
             scanned,
@@ -586,11 +630,7 @@ fn handle_do(paths: &[PathBuf], lang: Lang) {
             format_elapsed(started.elapsed())
         ),
     };
-    if removed > 0 {
-        log_done(summary);
-    } else {
-        log_done(summary);
-    }
+    log_done(summary);
 
     if failed > 0 {
         log_warn(permission_hint(lang, failed));
@@ -775,7 +815,7 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
     let mut initial_failed = 0;
     for p in &watch_paths {
         if p.exists() {
-            let (_, removed, failed) = sweep_fast(p, false);
+            let (_, removed, failed) = sweep_fast(p, false, false);
             initial_removed += removed;
             initial_failed += failed;
         }
@@ -842,7 +882,7 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
                     if !path.exists() {
                         continue;
                     }
-                    let (_, removed, failed) = sweep(&path, false);
+                    let (_, removed, failed) = sweep(&path, false, false);
                     if removed > 0 {
                         println!(
                             "{} {} 解除 {} 项",
@@ -1436,7 +1476,7 @@ fn main() {
                 .get_many::<PathBuf>("PATH")
                 .map(|p| p.cloned().collect())
                 .unwrap_or_default();
-            handle_do(&paths, active_lang);
+            handle_do(&paths, active_lang, verbose, sub_m.get_flag("dry-run"));
         }
         Some(("check", sub_m)) => {
             let paths: Vec<PathBuf> = sub_m.get_many::<PathBuf>("PATH").unwrap().cloned().collect();
@@ -1473,13 +1513,13 @@ fn main() {
             if quiet {
                 for p in &paths {
                     if p.exists() {
-                        sweep_fast(p, verbose);
+                        sweep_fast(p, verbose, false);
                     }
                 }
                 return;
             }
 
-            handle_do(&paths, active_lang);
+            handle_do(&paths, active_lang, verbose, false);
         }
     }
 }

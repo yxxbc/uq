@@ -99,6 +99,7 @@ uq
 
 # One-shot manual sweep (no args: ~/Downloads, Desktop, /Applications, /usr/local, mounted images)
 uq do
+uq do -n              # dry run: preview what would be cleaned (-v lists every file)
 
 # Clean a specific target (.dmg / .pkg / .app / any file)
 uq do ~/Downloads/SomeApp.dmg
@@ -128,6 +129,26 @@ uq lang zh
 
 # View full command help
 uq --help
+```
+
+---
+
+## What uq actually changes (security notes)
+
+uq does exactly one thing: it deletes the extended attribute `com.apple.quarantine`.
+
+- **Only that attribute**: `com.apple.provenance`, `com.apple.macl` and friends stay untouched, as do file contents, permissions, ownership and code signatures.
+- **No system-wide bypass**: SIP stays on, Gatekeeper's global switch is untouched, no TCC (privacy) permissions are modified, no sandbox/network/accessibility grants are added.
+- **No network access**: uq contains no network code; it never uploads paths, logs or anything else (the only external calls are local `xattr`, `walkdir`, `launchctl`, `hdiutil`, `ps` and `tail`).
+- **No symlink traversal**: walks use `follow_links(false)`, so a symlink can never redirect the cleanup outside the target.
+- **The only behavior change**: cleaned apps no longer show the first-launch "damaged / cannot verify developer" quarantine prompt — which is the point of the tool.
+
+Preview before touching anything:
+
+```bash
+uq do -n        # dry run: only counts what would be cleaned
+uq do -n -v     # dry run + list every path that would be cleaned
+uq check /Applications/SomeApp.app   # inspect a target's current quarantine attributes
 ```
 
 ---
