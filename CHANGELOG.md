@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.7] - 2026-10-24
+
+### Changed
+- Console output now follows the nixsave log style: a dimmed `uq：…` intro line, `[执行] n/m` step headers with dimmed details, `[完成]` / `[警告]` / `[失败]` result tags and dimmed hints.
+- The `uq` dashboard is redrawn as a width-aware rounded box (CJK/emoji aware alignment), and the command guide was removed from it — usage and the permission section now live in `uq help` / `uq --help`.
+- `uq do`, `uq check`, `uq watch`, `uq service …`, `uq log` and `uq lang` all speak the same output language; colors disable themselves when piped to the service log.
+
 ## [0.1.6] - 2026-10-24
 
 ### Fixed

@@ -1,6 +1,44 @@
 use std::fs;
 use std::path::PathBuf;
 
+const HELP_ZH: &str = "\
+日常用法
+  uq                    查看服务状态与资源开销
+  uq do                 手动清理常用目录（~/Downloads、桌面、/Applications、/usr/local、已挂载镜像）
+  uq do <路径>          清理指定目标，支持 .app / .dmg / .pkg
+  uq check <路径>       查看隔离属性及其来源
+  uq log [-f|-c]        查看 / 跟踪 / 清空后台日志
+  uq service <动作>     安装（默认 FSEvents 守护）、卸载、查看状态
+      --zero            改用零常驻内存的 WatchPaths 模式（更慢，粒度更粗）
+  uq lang <zh|en>       切换默认语言
+
+权限
+  macOS 13+ 的 App Management 会阻止修改 /Applications 中已有的应用包，
+  sudo 也无法绕过（权限跟随发起进程，也就是你的终端）。解决方式：
+    open \"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppBundles\"
+    把你的终端加入「App 管理」并勾选，重启终端后再执行 sudo uq do
+  Homebrew Cask 安装的应用可从源头避免：export HOMEBREW_CASK_OPTS=\"--no-quarantine\"
+";
+
+const HELP_EN: &str = "\
+Everyday use
+  uq                    Show service state and resource usage
+  uq do                 Manual sweep (~/Downloads, Desktop, /Applications, /usr/local, mounted images)
+  uq do <path>          Clean a specific target, including .app / .dmg / .pkg
+  uq check <path>       Show quarantine attributes and their origin
+  uq log [-f|-c]        View / follow / clear service logs
+  uq service <action>   Install (realtime FSEvents daemon by default), uninstall, status
+      --zero            Switch to zero-idle-memory WatchPaths mode (slower, coarser)
+  uq lang <zh|en>       Switch the default language
+
+Permissions
+  On macOS 13+ App Management blocks modifying existing app bundles in /Applications,
+  and sudo cannot bypass it (the permission follows the invoking process: your terminal).
+    open \"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppBundles\"
+    Add and enable your terminal under App Management, restart the terminal, then run sudo uq do
+  Homebrew Cask users can avoid it at the source: export HOMEBREW_CASK_OPTS=\"--no-quarantine\"
+";
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang {
     Zh,
@@ -216,6 +254,13 @@ impl Messages {
         match self.lang {
             Lang::Zh => "展示的日志行数 (默认: 20)",
             Lang::En => "Number of lines to show (default: 20)",
+        }
+    }
+
+    pub fn after_help(&self) -> &'static str {
+        match self.lang {
+            Lang::Zh => HELP_ZH,
+            Lang::En => HELP_EN,
         }
     }
 

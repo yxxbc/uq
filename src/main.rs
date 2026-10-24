@@ -160,6 +160,7 @@ fn build_cli(msg: &Messages) -> clap::Command {
                 .about(msg.cmd_lang())
                 .arg(arg!([LANG]).help(msg.cmd_lang_target())),
         )
+        .after_help(msg.after_help())
 }
 
 fn remove_quarantine(path: &Path) -> Result<bool, std::io::Error> {
@@ -306,17 +307,19 @@ fn result_line(
                 Lang::En => format!("stripped {} · scanned {} · {}{}", removed, scanned, time, denied),
             }
         };
+        let path_cell = pad_end(&truncate(&target.display().to_string(), 44), 44);
         if failed > 0 {
-            format!("  {} {:<44} {}", "!".yellow().bold(), target.display().to_string(), detail.yellow())
+            format!("  {} {} {}", "!".yellow().bold(), path_cell, detail.yellow())
         } else {
-            format!("  {} {:<44} {}", "✓".green().bold(), target.display().to_string(), detail.green())
+            format!("  {} {} {}", "✓".green().bold(), path_cell, detail.green())
         }
     } else {
         let detail = match lang {
             Lang::Zh => format!("无隔离属性 · 扫描 {} 项 · {}", scanned, time),
             Lang::En => format!("clean · scanned {} · {}", scanned, time),
         };
-        format!("  {} {:<44} {}", "·".dimmed(), target.display().to_string(), detail.dimmed())
+        let path_cell = pad_end(&truncate(&target.display().to_string(), 44), 44);
+        format!("  {} {} {}", "·".dimmed(), path_cell, detail.dimmed())
     }
 }
 
@@ -324,7 +327,7 @@ fn permission_hint(lang: Lang, failed: usize) -> String {
     let open_cmd = "open \"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AppBundles\"";
     match lang {
         Lang::Zh => format!(
-            "⚠️  {} 项被 App Management 拦截（sudo 也无效：权限跟随发起进程，也就是你的终端）。\n   \
+            "{} 项被 App Management 拦截（sudo 也无效：权限跟随发起进程，也就是你的终端）。\n   \
              1) 系统设置 › 隐私与安全性 › App 管理 → 加入并勾选你的终端（建议同时给「完全磁盘访问权限」），重启终端后再试\n   \
              2) 一键跳转：{}\n   \
              3) Homebrew Cask 安装的应用可从源头避免：export HOMEBREW_CASK_OPTS=\"--no-quarantine\"",
@@ -332,7 +335,7 @@ fn permission_hint(lang: Lang, failed: usize) -> String {
             open_cmd.yellow(),
         ),
         Lang::En => format!(
-            "⚠️  {} item(s) blocked by App Management (sudo does not help: permission follows the invoking process, your terminal).\n   \
+            "{} item(s) blocked by App Management (sudo does not help: permission follows the invoking process, your terminal).\n   \
              1) System Settings › Privacy & Security › App Management → add and enable your terminal (grant Full Disk Access too), restart the terminal and retry\n   \
              2) Jump straight there: {}\n   \
              3) For Homebrew Cask, avoid it at the source: export HOMEBREW_CASK_OPTS=\"--no-quarantine\"",
@@ -349,6 +352,138 @@ fn format_elapsed(d: Duration) -> String {
     } else {
         format!("{:.2}s", d.as_secs_f64())
     }
+}
+
+// ---------- 输出样式（对齐中文宽度 + nixsave 风格日志） ----------
+
+const BOX_INNER: usize = 62;
+
+fn char_width(c: char) -> usize {
+    let cp = c as u32;
+    if matches!(
+        cp,
+        0x1100..=0x115F
+            | 0x2E80..=0xA4CF
+            | 0xA960..=0xA97F
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE10..=0xFE19
+            | 0xFE30..=0xFE6F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x2600..=0x27BF
+            | 0x2B00..=0x2BFF
+            | 0x1F300..=0x1FAFF
+            | 0x20000..=0x3FFFD
+    ) {
+        2
+    } else {
+        1
+    }
+}
+
+fn display_width(s: &str) -> usize {
+    s.chars().map(char_width).sum()
+}
+
+fn pad_end(s: &str, width: usize) -> String {
+    format!("{}{}", s, " ".repeat(width.saturating_sub(display_width(s))))
+}
+
+fn truncate(s: &str, width: usize) -> String {
+    if display_width(s) <= width {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    for c in s.chars() {
+        if display_width(&out) + char_width(c) + 1 > width {
+            break;
+        }
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
+
+fn truncate_words(s: &str, width: usize) -> String {
+    if display_width(s) <= width {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    for word in s.split_whitespace() {
+        let candidate = if out.is_empty() {
+            word.to_string()
+        } else {
+            format!("{} {}", out, word)
+        };
+        if display_width(&candidate) + 2 > width {
+            break;
+        }
+        out = candidate;
+    }
+    format!("{} …", out)
+}
+
+fn box_top(title: &str, colored: String) -> String {
+    let dashes = BOX_INNER.saturating_sub(3 + display_width(title));
+    format!("  ╭─ {} {}╮", colored, "─".repeat(dashes))
+}
+
+fn box_sep(title: &str, colored: String) -> String {
+    let dashes = BOX_INNER.saturating_sub(3 + display_width(title));
+    format!("  ├─ {} {}┤", colored, "─".repeat(dashes))
+}
+
+fn box_bottom() -> String {
+    format!("  ╰{}╯", "─".repeat(BOX_INNER))
+}
+
+fn box_row(label: &str, value: &str, colored: String) -> String {
+    let pad = BOX_INNER.saturating_sub(7 + display_width(value));
+    format!(
+        "  │ {} {}{}│",
+        pad_end(label, 6).dimmed(),
+        colored,
+        " ".repeat(pad)
+    )
+}
+
+fn log_intro(text: String) {
+    println!("{}", text.dimmed());
+}
+
+fn log_step(idx: usize, total: usize, title: &str, detail: Option<String>) {
+    println!(
+        "\n{} {}",
+        "[执行]".cyan(),
+        format!("{}/{} {}", idx, total, title).bold()
+    );
+    if let Some(d) = detail {
+        println!("  {}", d.dimmed());
+    }
+}
+
+fn log_action(title: &str, detail: Option<String>) {
+    println!("\n{} {}", "[执行]".cyan(), title.bold());
+    if let Some(d) = detail {
+        println!("  {}", d.dimmed());
+    }
+}
+
+fn log_done(text: String) {
+    println!("\n{} {}", "[完成]".green().bold(), text.bold());
+}
+
+fn log_warn(text: String) {
+    println!("{} {}", "[警告]".yellow(), text);
+}
+
+fn log_fail(text: String) {
+    println!("{} {}", "[失败]".red(), text);
+}
+
+fn log_hint(text: String) {
+    println!("  {}", text.dimmed());
 }
 
 fn is_archive(path: &Path) -> bool {
@@ -368,34 +503,37 @@ fn handle_do(paths: &[PathBuf], lang: Lang) {
         targets.retain(|p| p.exists());
     }
 
-    println!();
-    let title = match lang {
-        Lang::Zh => "🧹 uq do · 手动清理隔离属性",
-        Lang::En => "🧹 uq do · Manual quarantine cleanup",
-    };
-    println!("{}", title.cyan().bold());
-    if use_defaults {
-        let hint = match lang {
-            Lang::Zh => "未指定路径，自动清理常用落地目录与已挂载镜像:",
-            Lang::En => "No path given, sweeping common locations and mounted images:",
-        };
-        println!("{}", hint.dimmed());
-    }
-    println!();
+    log_intro(
+        match lang {
+            Lang::Zh => "uq：手动解除隔离属性（忘了用法就运行 uq help）",
+            Lang::En => "uq: strip quarantine manually (run uq help if unsure)",
+        }
+        .to_string(),
+    );
 
     if targets.is_empty() {
-        let msg = match lang {
-            Lang::Zh => "没有可清理的目标目录。",
-            Lang::En => "Nothing to sweep.",
-        };
-        println!("{} {}", "=".blue(), msg);
+        log_warn(match lang {
+            Lang::Zh => "没有可清理的目标目录。".to_string(),
+            Lang::En => "Nothing to sweep.".to_string(),
+        });
         return;
     }
 
+    let target_list = targets
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    log_action(
+        match lang {
+            Lang::Zh => "扫描并解除隔离属性",
+            Lang::En => "Scan and strip quarantine",
+        },
+        Some(truncate(&target_list, 100)),
+    );
+
     let started = Instant::now();
-    let mut scanned = 0;
-    let mut removed = 0;
-    let mut failed = 0;
+    let (mut scanned, mut removed, mut failed) = (0, 0, 0);
     for target in &targets {
         let (s, r, f) = process_path(target, false, false, use_defaults, lang);
         scanned += s;
@@ -403,17 +541,16 @@ fn handle_do(paths: &[PathBuf], lang: Lang) {
         failed += f;
     }
 
-    println!("{}", "─".repeat(72).dimmed());
     let summary = match lang {
         Lang::Zh => format!(
-            "✅ 清理完成 · 目标 {} 个 · 扫描 {} 项 · 清除 {} 项 · 用时 {}",
+            "{} 个目标 · 扫描 {} 项 · 解除 {} 项 · 用时 {}",
             targets.len(),
             scanned,
             removed,
             format_elapsed(started.elapsed())
         ),
         Lang::En => format!(
-            "✅ Done · {} target(s) · scanned {} · stripped {} · {}",
+            "{} target(s) · scanned {} · stripped {} · {}",
             targets.len(),
             scanned,
             removed,
@@ -421,54 +558,81 @@ fn handle_do(paths: &[PathBuf], lang: Lang) {
         ),
     };
     if removed > 0 {
-        println!("{}", summary.green().bold());
+        log_done(summary);
     } else {
-        println!("{}", summary.blue().bold());
+        log_done(summary);
     }
+
     if failed > 0 {
-        println!("{}", permission_hint(lang, failed));
+        log_warn(permission_hint(lang, failed));
+        log_hint(match lang {
+            Lang::Zh => "完整说明见 uq help 的「权限」一节".to_string(),
+            Lang::En => "See the Permissions section in uq help".to_string(),
+        });
     }
-    println!();
 }
 
-
 fn handle_check(paths: &[PathBuf], lang: Lang) {
-    for path in paths {
+    log_intro(
+        match lang {
+            Lang::Zh => "uq：检查隔离属性与来源（忘了用法就运行 uq help）",
+            Lang::En => "uq: inspect quarantine attributes (run uq help if unsure)",
+        }
+        .to_string(),
+    );
+
+    for (idx, path) in paths.iter().enumerate() {
+        log_step(
+            idx + 1,
+            paths.len(),
+            match lang {
+                Lang::Zh => "检查目标",
+                Lang::En => "Inspect target",
+            },
+            Some(path.display().to_string()),
+        );
+
         if !path.exists() {
-            let not_found = match lang {
-                Lang::Zh => "文件不存在",
-                Lang::En => "not found",
-            };
-            println!("{} {} ({})", "[-]".red(), path.display(), not_found);
+            log_fail(match lang {
+                Lang::Zh => format!("{} 不存在", path.display()),
+                Lang::En => format!("{} does not exist", path.display()),
+            });
             continue;
         }
 
-        let mut found_count = 0;
+        let mut found = 0;
         for entry in WalkDir::new(path).follow_links(false).into_iter().filter_map(|e| e.ok()) {
             let p = entry.path();
             if let Ok(Some(val)) = xattr::get(p, QUARANTINE_ATTR) {
-                found_count += 1;
-                let val_str = String::from_utf8_lossy(&val);
+                found += 1;
                 println!(
-                    "{} {}: {}",
-                    "[QUARANTINED]".yellow().bold(),
+                    "  {} {}  {}",
+                    "[隔离]".yellow(),
                     p.display(),
-                    val_str.trim()
+                    String::from_utf8_lossy(&val).trim().dimmed()
                 );
             }
         }
 
-        if found_count == 0 {
-            let clean_label = match lang {
-                Lang::Zh => "正常无隔离属性",
-                Lang::En => "Clean",
-            };
-            println!("{} {}: {}", "[OK]".green().bold(), clean_label, path.display());
+        if found == 0 {
+            println!(
+                "  {} {}",
+                "[干净]".green(),
+                path.display().to_string().green()
+            );
+        } else {
+            println!(
+                "  {}",
+                match lang {
+                    Lang::Zh => format!("共 {} 项带隔离属性", found),
+                    Lang::En => format!("{} item(s) quarantined", found),
+                }
+                .dimmed()
+            );
         }
     }
 }
 
-/// Real user home; `sudo uq do` must still sweep the invoking user's folders.
 fn home_dir() -> Option<PathBuf> {
     if let Ok(user) = std::env::var("SUDO_USER") {
         let p = PathBuf::from("/Users").join(user);
@@ -555,21 +719,29 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
         custom_paths.to_vec()
     };
 
-    let title = match lang {
-        Lang::Zh => "=== Unquarantine 实时监听已启动 ===".cyan().bold(),
-        Lang::En => "=== Unquarantine Watcher Started ===".cyan().bold(),
-    };
-    println!("{}", title);
-    let prompt = match lang {
-        Lang::Zh => "正在监听以下目录:",
-        Lang::En => "Monitoring directories:",
-    };
-    println!("{}", prompt);
-    for p in &watch_paths {
-        println!("  -> {}", p.display().to_string().yellow());
-    }
+    log_intro(
+        match lang {
+            Lang::Zh => "uq：实时监听文件变化（忘了用法就运行 uq help）",
+            Lang::En => "uq: watch files in realtime (run uq help if unsure)",
+        }
+        .to_string(),
+    );
 
-    // Catch anything that landed while the watcher was not running.
+    let monitored = watch_paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    log_step(
+        1,
+        2,
+        match lang {
+            Lang::Zh => "补扫历史隔离属性",
+            Lang::En => "Sweep leftover quarantine",
+        },
+        Some(truncate(&monitored, 100)),
+    );
+
     let mut initial_removed = 0;
     let mut initial_failed = 0;
     for p in &watch_paths {
@@ -579,15 +751,15 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
             initial_failed += failed;
         }
     }
-    if initial_removed > 0 {
-        let msg = match lang {
-            Lang::Zh => format!("{} [启动扫描] 补清 {} 项历史隔离属性", "+".green().bold(), initial_removed),
-            Lang::En => format!("{} [Startup Sweep] Cleaned {} leftover item(s)", "+".green().bold(), initial_removed),
-        };
-        println!("{}", msg);
-    }
-    if initial_failed > 0 {
-        println!("{}", permission_hint(lang, initial_failed));
+    if initial_removed > 0 || initial_failed > 0 {
+        println!(
+            "  {}",
+            match lang {
+                Lang::Zh => format!("解除 {} 项 · 失败 {} 项", initial_removed, initial_failed),
+                Lang::En => format!("stripped {} · failed {}", initial_removed, initial_failed),
+            }
+            .dimmed()
+        );
     }
 
     let (tx, rx) = channel();
@@ -607,6 +779,24 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
         }
     }
 
+    log_step(
+        2,
+        2,
+        match lang {
+            Lang::Zh => "监听目录变化",
+            Lang::En => "Watch directory changes",
+        },
+        None,
+    );
+    for p in &watch_paths {
+        println!("  {}", p.display().to_string().dimmed());
+    }
+
+    log_done(match lang {
+        Lang::Zh => "监听中，按 Ctrl+C 退出".to_string(),
+        Lang::En => "Watching, press Ctrl+C to stop".to_string(),
+    });
+
     let mut pending: Vec<PathBuf> = Vec::new();
     loop {
         match rx.recv_timeout(DEBOUNCE) {
@@ -625,24 +815,15 @@ fn handle_watch(custom_paths: &[PathBuf], lang: Lang) {
                     }
                     let (_, removed, failed) = sweep(&path, false);
                     if removed > 0 {
-                        let msg = match lang {
-                            Lang::Zh => format!(
-                                "{} [自动清除] 已为 {} 移除 {} 项隔离属性",
-                                "+".green().bold(),
-                                path.display(),
-                                removed
-                            ),
-                            Lang::En => format!(
-                                "{} [Auto-Clean] Cleared {} quarantine attribute(s) from {}",
-                                "+".green().bold(),
-                                removed,
-                                path.display()
-                            ),
-                        };
-                        println!("{}", msg);
+                        println!(
+                            "{} {} 解除 {} 项",
+                            "[完成]".green().bold(),
+                            path.display(),
+                            removed
+                        );
                     }
                     if failed > 0 {
-                        println!("{}", permission_hint(lang, failed));
+                        log_warn(permission_hint(lang, failed));
                     }
                 }
             }
@@ -742,49 +923,71 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
                 )
             };
 
+            log_step(
+                1,
+                2,
+                match lang {
+                    Lang::Zh => "写入 launchd 配置",
+                    Lang::En => "Write launchd plist",
+                },
+                Some(plist_path.display().to_string()),
+            );
             fs::write(&plist_path, plist_content).expect("Failed to write plist file");
+
+            log_step(
+                2,
+                2,
+                match lang {
+                    Lang::Zh => "注册并启动服务",
+                    Lang::En => "Register and start service",
+                },
+                None,
+            );
             let _ = Command::new("launchctl").arg("unload").arg(&plist_path).output();
             let status = Command::new("launchctl").arg("load").arg(&plist_path).status();
 
             match status {
                 Ok(s) if s.success() => {
-                    let success_msg = match lang {
-                        Lang::Zh => format!("{} 后台服务安装并注册成功！", "[+]".green().bold()),
-                        Lang::En => format!("{} Launchd agent installed successfully!", "[+]".green().bold()),
-                    };
-                    println!("{}", success_msg);
-                    if zero_memory {
-                        let m1 = match lang {
-                            Lang::Zh => "运行模式: 零内存事件唤醒 (WatchPaths，较慢)",
-                            Lang::En => "Mode: Zero-Memory Event Trigger (WatchPaths, slower)",
-                        };
-                        let m2 = match lang {
-                            Lang::Zh => "空闲开销: 0 MB 内存, 0% CPU",
-                            Lang::En => "Idle Footprint: 0 MB memory, 0% CPU",
-                        };
-                        println!("{}", m1);
-                        println!("{}", m2);
+                    let done = if zero_memory {
+                        match lang {
+                            Lang::Zh => "后台服务已就绪 · WatchPaths 零常驻模式".to_string(),
+                            Lang::En => "Background agent ready · WatchPaths zero-memory mode".to_string(),
+                        }
                     } else {
-                        let m1 = match lang {
-                            Lang::Zh => "运行模式: FSEvents 实时守护 (毫秒级响应，约 350ms 内完成清理)",
-                            Lang::En => "Mode: Realtime FSEvents Daemon (cleanup within ~350ms)",
-                        };
-                        let m2 = match lang {
-                            Lang::Zh => "空闲开销: 约 7 MB 内存, 接近 0% CPU",
-                            Lang::En => "Idle Footprint: ~7 MB memory, ~0% CPU",
-                        };
-                        println!("{}", m1);
-                        println!("{}", m2);
-                    }
-                    println!("Service Plist: {}", plist_path.display());
-                    println!("Logs: {}", LOG_PATH);
+                        match lang {
+                            Lang::Zh => "后台服务已运行 · FSEvents 实时守护".to_string(),
+                            Lang::En => "Background agent running · realtime FSEvents daemon".to_string(),
+                        }
+                    };
+                    log_done(done);
+                    println!(
+                        "  {}",
+                        match lang {
+                            Lang::Zh => if zero_memory {
+                                "空闲 0 MB 内存 · 目录变化时由 launchd 唤醒（较慢）".to_string()
+                            } else {
+                                "约 7 MB 内存 · 350ms 内完成清理 · 启动时自动补扫".to_string()
+                            },
+                            Lang::En => if zero_memory {
+                                "0 MB idle · woken by launchd on directory changes (slower)".to_string()
+                            } else {
+                                "~7 MB memory · cleanup within 350ms · startup sweep included".to_string()
+                            },
+                        }
+                        .dimmed()
+                    );
+                    println!("  {}", format!("plist  {}", plist_path.display()).dimmed());
+                    println!("  {}", format!("日志   {}", LOG_PATH).dimmed());
                 }
                 _ => {
-                    let err_msg = match lang {
-                        Lang::Zh => format!("{} 使用 launchctl 加载服务失败。", "[-]".red()),
-                        Lang::En => format!("{} Failed to load launchd service with launchctl.", "[-]".red()),
-                    };
-                    eprintln!("{}", err_msg);
+                    log_fail(match lang {
+                        Lang::Zh => "launchctl 加载服务失败".to_string(),
+                        Lang::En => "launchctl failed to load the service".to_string(),
+                    });
+                    log_hint(match lang {
+                        Lang::Zh => format!("配置已写入 {}，可运行 uq service uninstall 回滚", plist_path.display()),
+                        Lang::En => format!("Plist written to {}; run uq service uninstall to roll back", plist_path.display()),
+                    });
                 }
             }
         }
@@ -792,17 +995,20 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
             if plist_path.exists() {
                 let _ = Command::new("launchctl").arg("unload").arg(&plist_path).output();
                 let _ = fs::remove_file(&plist_path);
-                let msg = match lang {
-                    Lang::Zh => format!("{} 后台服务已停止并卸载完成。", "[+]".green().bold()),
-                    Lang::En => format!("{} Background agent stopped and uninstalled.", "[+]".green().bold()),
-                };
-                println!("{}", msg);
+                log_done(match lang {
+                    Lang::Zh => "后台服务已停止并卸载".to_string(),
+                    Lang::En => "Background agent stopped and uninstalled".to_string(),
+                });
+                println!("  {}", plist_path.display().to_string().dimmed());
             } else {
-                let msg = match lang {
-                    Lang::Zh => format!("{} 后台服务尚未安装。", "[=]".blue()),
-                    Lang::En => format!("{} Background agent is not installed.", "[=]".blue()),
-                };
-                println!("{}", msg);
+                log_warn(match lang {
+                    Lang::Zh => "后台服务尚未安装".to_string(),
+                    Lang::En => "Background agent is not installed".to_string(),
+                });
+                log_hint(match lang {
+                    Lang::Zh => "运行 uq service install 开启后台自动清理".to_string(),
+                    Lang::En => "Run uq service install to enable automatic cleanup".to_string(),
+                });
             }
         }
         Some(("status", _)) => {
@@ -811,42 +1017,66 @@ fn handle_service(action_matches: &clap::ArgMatches, lang: Lang) {
                 .output()
                 .expect("Failed to execute launchctl");
             let list = String::from_utf8_lossy(&output.stdout);
+
+            log_action(
+                match lang {
+                    Lang::Zh => "检查后台服务",
+                    Lang::En => "Inspect background service",
+                },
+                Some(plist_path.display().to_string()),
+            );
+
             if list.contains(SERVICE_LABEL) {
                 let is_daemon = fs::read_to_string(&plist_path)
                     .map(|c| c.contains("<key>KeepAlive</key>"))
                     .unwrap_or(false);
-                if is_daemon {
-                    let msg = match lang {
-                        Lang::Zh => format!("{} 服务处于激活状态 (常驻守护模式)", "[RUNNING]".green().bold()),
-                        Lang::En => format!("{} Service is ACTIVE (running as daemon)", "[RUNNING]".green().bold()),
-                    };
-                    println!("{}", msg);
+                let mode = if is_daemon {
+                    match lang {
+                        Lang::Zh => "FSEvents 实时守护 (350ms 内完成清理)",
+                        Lang::En => "Realtime FSEvents daemon (cleanup within 350ms)",
+                    }
                 } else {
-                    let msg1 = match lang {
-                        Lang::Zh => format!("{} 服务处于就绪状态 (零内存 WatchPaths 事件监听)", "[READY]".green().bold()),
-                        Lang::En => format!("{} Service is ACTIVE (Zero-memory WatchPaths event trigger)", "[READY]".green().bold()),
-                    };
-                    let msg2 = match lang {
-                        Lang::Zh => "资源占用: 平时 0 MB 内存，仅在文件变动时唤醒处理",
-                        Lang::En => "Footprint: 0 MB memory idle, wakes on file changes",
-                    };
-                    println!("{}", msg1);
-                    println!("{}", msg2);
-                }
-                println!("Plist: {}", plist_path.display());
-                println!("Logs: {}", LOG_PATH);
+                    match lang {
+                        Lang::Zh => "WatchPaths 零常驻 (目录变化时唤醒)",
+                        Lang::En => "WatchPaths zero-memory (woken on changes)",
+                    }
+                };
+                println!(
+                    "  {} {}",
+                    "●".green(),
+                    match lang {
+                        Lang::Zh => "运行中",
+                        Lang::En => "Running",
+                    }
+                    .green()
+                    .bold()
+                );
+                println!("  {} {}", pad_end(match lang { Lang::Zh => "模式", Lang::En => "Mode" }, 6).dimmed(), mode);
+                let dirs = default_watch_dirs()
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n         ");
+                println!("  {} {}", pad_end(match lang { Lang::Zh => "监听", Lang::En => "Watch" }, 6).dimmed(), dirs);
+                println!("  {} {}", pad_end(match lang { Lang::Zh => "日志", Lang::En => "Log" }, 6).dimmed(), LOG_PATH.dimmed());
             } else if plist_path.exists() {
-                let msg = match lang {
-                    Lang::Zh => format!("{} 服务配置文件存在但未加载", "[STOPPED]".yellow().bold()),
-                    Lang::En => format!("{} Service plist exists but is not loaded", "[STOPPED]".yellow().bold()),
-                };
-                println!("{}", msg);
+                log_warn(match lang {
+                    Lang::Zh => "配置存在但服务未加载".to_string(),
+                    Lang::En => "Plist exists but the service is not loaded".to_string(),
+                });
+                log_hint(match lang {
+                    Lang::Zh => "运行 uq service install 重新注册".to_string(),
+                    Lang::En => "Run uq service install to register it again".to_string(),
+                });
             } else {
-                let msg = match lang {
-                    Lang::Zh => format!("{} 服务未安装", "[NOT INSTALLED]".blue()),
-                    Lang::En => format!("{} Service is not installed", "[NOT INSTALLED]".blue()),
-                };
-                println!("{}", msg);
+                log_warn(match lang {
+                    Lang::Zh => "服务未安装".to_string(),
+                    Lang::En => "Service is not installed".to_string(),
+                });
+                log_hint(match lang {
+                    Lang::Zh => "运行 uq service install 开启后台自动清理".to_string(),
+                    Lang::En => "Run uq service install to enable automatic cleanup".to_string(),
+                });
             }
         }
         _ => {}
@@ -859,11 +1089,18 @@ fn handle_log(sub_m: &clap::ArgMatches, lang: Lang) {
     if sub_m.get_flag("clear") {
         let _ = fs::write(&log_path, "");
         let _ = fs::write(&err_path, "");
-        let msg = match lang {
-            Lang::Zh => format!("{} 后台服务日志已清空。", "[+]".green().bold()),
-            Lang::En => format!("{} Background service log files cleared.", "[+]".green().bold()),
-        };
-        println!("{}", msg);
+        log_intro(
+            match lang {
+                Lang::Zh => "uq：清空后台日志（忘了用法就运行 uq help）",
+                Lang::En => "uq: clear service logs (run uq help if unsure)",
+            }
+            .to_string(),
+        );
+        log_done(match lang {
+            Lang::Zh => "后台日志已清空".to_string(),
+            Lang::En => "Service logs cleared".to_string(),
+        });
+        println!("  {}", LOG_PATH.dimmed());
         return;
     }
 
@@ -871,11 +1108,20 @@ fn handle_log(sub_m: &clap::ArgMatches, lang: Lang) {
         if !log_path.exists() {
             let _ = fs::write(&log_path, "");
         }
-        let hint = match lang {
-            Lang::Zh => "正在实时追踪后台日志（按 Ctrl+C 退出）:",
-            Lang::En => "Following background log in real-time (Press Ctrl+C to exit):",
-        };
-        println!("{}", hint.cyan().bold());
+        log_intro(
+            match lang {
+                Lang::Zh => "uq：实时追踪后台日志（忘了用法就运行 uq help）",
+                Lang::En => "uq: follow service logs (run uq help if unsure)",
+            }
+            .to_string(),
+        );
+        log_action(
+            match lang {
+                Lang::Zh => "跟踪日志输出",
+                Lang::En => "Follow log output",
+            },
+            Some(format!("{} · Ctrl+C 退出", LOG_PATH)),
+        );
         let _ = Command::new("tail").arg("-f").arg(&log_path).status();
         return;
     }
@@ -883,11 +1129,10 @@ fn handle_log(sub_m: &clap::ArgMatches, lang: Lang) {
     let lines_to_show = *sub_m.get_one::<usize>("lines").unwrap_or(&20);
 
     if !log_path.exists() {
-        let msg = match lang {
-            Lang::Zh => format!("暂无日志文件 ({} 不存在)。", LOG_PATH),
-            Lang::En => format!("No log file found ({} does not exist).", LOG_PATH),
-        };
-        println!("{} {}", "[=]".blue(), msg);
+        log_warn(match lang {
+            Lang::Zh => format!("暂无日志文件（{} 不存在）", LOG_PATH),
+            Lang::En => format!("No log file yet ({} does not exist)", LOG_PATH),
+        });
         return;
     }
 
@@ -895,27 +1140,33 @@ fn handle_log(sub_m: &clap::ArgMatches, lang: Lang) {
     let all_lines: Vec<&str> = content.lines().collect();
 
     if all_lines.is_empty() {
-        let msg = match lang {
-            Lang::Zh => "后台日志内容为空。",
-            Lang::En => "Log is empty.",
-        };
-        println!("{} {}", "[=]".blue(), msg);
+        log_warn(match lang {
+            Lang::Zh => "后台日志内容为空".to_string(),
+            Lang::En => "Service log is empty".to_string(),
+        });
+        log_hint(match lang {
+            Lang::Zh => "有文件落地并触发清理后这里才会有内容".to_string(),
+            Lang::En => "Entries appear once a file event triggers cleanup".to_string(),
+        });
         return;
     }
 
-    let start = if all_lines.len() > lines_to_show {
-        all_lines.len() - lines_to_show
-    } else {
-        0
-    };
+    let start = all_lines.len().saturating_sub(lines_to_show);
 
-    let header = match lang {
-        Lang::Zh => format!("=== 最近 {} 条服务日志 ({}) ===", all_lines.len() - start, LOG_PATH),
-        Lang::En => format!("=== Last {} log entries ({}) ===", all_lines.len() - start, LOG_PATH),
-    };
-    println!("{}", header.cyan().bold());
+    println!();
+    println!(
+        "{} {}",
+        "[执行]".cyan(),
+        match lang {
+            Lang::Zh => format!("读取最近 {} 条日志", all_lines.len() - start),
+            Lang::En => format!("Read last {} log entries", all_lines.len() - start),
+        }
+        .bold()
+    );
+    println!("  {}", LOG_PATH.dimmed());
+    println!();
     for line in &all_lines[start..] {
-        println!("{}", line);
+        println!("  {}", line);
     }
 }
 
@@ -923,16 +1174,16 @@ fn handle_lang_command(target_lang: Option<&String>, current_lang: Lang) {
     if let Some(target) = target_lang {
         if let Some(new_lang) = Lang::from_str(target) {
             if let Err(e) = save_lang(new_lang) {
-                eprintln!("{} Failed to save language: {}", "[-]".red(), e);
+                log_fail(format!("Failed to save language: {}", e));
             } else {
-                let msg = match new_lang {
-                    Lang::Zh => format!("{} 默认语言已切换为中文 (zh)", "[+]".green().bold()),
-                    Lang::En => format!("{} Default language set to English (en)", "[+]".green().bold()),
-                };
-                println!("{}", msg);
+                log_done(match new_lang {
+                    Lang::Zh => "默认语言已切换为中文 (zh)".to_string(),
+                    Lang::En => "Default language set to English (en)".to_string(),
+                });
             }
         } else {
-            eprintln!("{} Unknown language: '{}'. Supported: zh, en", "[-]".red(), target);
+            log_fail(format!("Unknown language '{}' · supported: zh, en", target));
+            log_hint("uq lang zh | uq lang en".to_string());
         }
     } else {
         let msg = match current_lang {
@@ -947,216 +1198,178 @@ fn show_dashboard(lang: Lang) {
     let plist_path = get_plist_path();
     let service_installed = plist_path.exists();
 
-    let output = Command::new("launchctl")
+    let launchctl_output = Command::new("launchctl")
         .arg("list")
         .output()
-        .ok();
-    let launchctl_output = output
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
 
     let mut is_active = false;
     let mut pid_opt: Option<u32> = None;
-
     for line in launchctl_output.lines() {
         if line.contains(SERVICE_LABEL) {
             is_active = true;
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if let Some(pid_str) = parts.first() {
-                if let Ok(pid) = pid_str.parse::<u32>() {
-                    pid_opt = Some(pid);
-                }
+            if let Some(pid) = line.split_whitespace().next().and_then(|s| s.parse::<u32>().ok()) {
+                pid_opt = Some(pid);
             }
             break;
         }
     }
 
-    let is_daemon = if service_installed {
-        fs::read_to_string(&plist_path)
+    let is_daemon = service_installed
+        && fs::read_to_string(&plist_path)
             .map(|c| c.contains("<key>KeepAlive</key>"))
-            .unwrap_or(false)
-    } else {
-        false
-    };
+            .unwrap_or(false);
 
-    let title = format!("⚡️ uq (Unquarantine) v{}", env!("CARGO_PKG_VERSION"));
-    let subtitle = match lang {
-        Lang::Zh => "极速 macOS 隔离属性自动解除与后台静默守护工具",
-        Lang::En => "Lightning-fast macOS quarantine remover & background watcher",
-    };
-
-    println!("\n{}", title.cyan().bold());
-    println!("{}\n", subtitle.dimmed());
-
-    let (status_text, mem_text, cpu_text, power_text, mode_text) = if !service_installed {
-        match lang {
-            Lang::Zh => (
-                "⚪️ 未安装 (运行 `uq service install` 一键开启)".yellow().to_string(),
-                "-".to_string(),
-                "-".to_string(),
-                "-".to_string(),
-                "未配置".dimmed().to_string(),
-            ),
-            Lang::En => (
-                "⚪️ NOT INSTALLED (Run `uq service install` to enable)".yellow().to_string(),
-                "-".to_string(),
-                "-".to_string(),
-                "-".to_string(),
-                "Unconfigured".dimmed().to_string(),
-            ),
-        }
-    } else if is_active {
-        if is_daemon {
-            let (mem, cpu) = if let Some(pid) = pid_opt {
-                if let Ok(ps_out) = Command::new("ps")
+    let (status, mode, mem, cpu) = if !service_installed {
+        (
+            match lang {
+                Lang::Zh => "未安装",
+                Lang::En => "Not installed",
+            },
+            match lang {
+                Lang::Zh => "—",
+                Lang::En => "—",
+            },
+            "—".to_string(),
+            "—".to_string(),
+        )
+    } else if !is_active {
+        (
+            match lang {
+                Lang::Zh => "已停止",
+                Lang::En => "Stopped",
+            },
+            match lang {
+                Lang::Zh => "—",
+                Lang::En => "—",
+            },
+            "—".to_string(),
+            "—".to_string(),
+        )
+    } else if is_daemon {
+        let (mem, cpu) = pid_opt
+            .and_then(|pid| {
+                Command::new("ps")
                     .arg("-o")
                     .arg("rss,%cpu")
                     .arg("-p")
                     .arg(pid.to_string())
                     .output()
-                {
-                    let ps_str = String::from_utf8_lossy(&ps_out.stdout);
-                    let mut lines = ps_str.lines().skip(1);
-                    if let Some(data) = lines.next() {
-                        let parts: Vec<&str> = data.split_whitespace().collect();
-                        let rss_kb: f64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-                        let cpu_val: &str = parts.get(1).unwrap_or(&"0.0");
-                        (format!("{:.2} MB", rss_kb / 1024.0), format!("{}%", cpu_val))
-                    } else {
-                        ("~7.00 MB".to_string(), "0.0%".to_string())
-                    }
-                } else {
-                    ("~7.00 MB".to_string(), "0.0%".to_string())
-                }
-            } else {
-                ("~7.00 MB".to_string(), "0.0%".to_string())
-            };
+                    .ok()
+                    .and_then(|out| {
+                        let text = String::from_utf8_lossy(&out.stdout).to_string();
+                        let parts: Vec<String> = text
+                            .lines()
+                            .nth(1)?
+                            .split_whitespace()
+                            .map(|s| s.to_string())
+                            .collect();
+                        let rss: f64 = parts.first()?.parse().ok()?;
+                        Some((format!("{:.2} MB", rss / 1024.0), format!("{}%", parts.get(1)?)))
+                    })
+            })
+            .unwrap_or_else(|| ("~7.00 MB".to_string(), "0.0%".to_string()));
+        (
             match lang {
-                Lang::Zh => (
-                    "🟢 运行中 (常驻守护模式)".green().bold().to_string(),
-                    mem,
-                    cpu,
-                    "< 0.05 W (极低功耗)".green().to_string(),
-                    "FSEvents 实时守护 (毫秒级触发)".to_string(),
-                ),
-                Lang::En => (
-                    "🟢 RUNNING (Persistent Daemon)".green().bold().to_string(),
-                    mem,
-                    cpu,
-                    "< 0.05 W (Ultra-low)".green().to_string(),
-                    "Realtime FSEvents Daemon".to_string(),
-                ),
-            }
-        } else {
+                Lang::Zh => "运行中 (常驻守护)",
+                Lang::En => "Running (daemon)",
+            },
             match lang {
-                Lang::Zh => (
-                    "🟢 激活就绪 (事件触发即时处理)".green().bold().to_string(),
-                    "0.00 MB (空闲零常驻)".green().bold().to_string(),
-                    "0.0%".green().bold().to_string(),
-                    "0.00 W (完全休眠零功耗)".green().bold().to_string(),
-                    "零内存事件唤醒 (WatchPaths)".cyan().to_string(),
-                ),
-                Lang::En => (
-                    "🟢 ACTIVE (Ready for file events)".green().bold().to_string(),
-                    "0.00 MB (Zero-Memory Idle)".green().bold().to_string(),
-                    "0.0%".green().bold().to_string(),
-                    "0.00 W (Zero Idle Power)".green().bold().to_string(),
-                    "Zero-Memory Event Trigger (WatchPaths)".cyan().to_string(),
-                ),
-            }
-        }
+                Lang::Zh => "FSEvents 实时监听 (毫秒级触发)",
+                Lang::En => "Realtime FSEvents (millisecond trigger)",
+            },
+            mem,
+            cpu,
+        )
     } else {
-        match lang {
-            Lang::Zh => (
-                "🟡 已配置但未加载".yellow().to_string(),
-                "-".to_string(),
-                "-".to_string(),
-                "-".to_string(),
-                "已停用".dimmed().to_string(),
-            ),
-            Lang::En => (
-                "🟡 Configured but Stopped".yellow().to_string(),
-                "-".to_string(),
-                "-".to_string(),
-                "-".to_string(),
-                "Stopped".dimmed().to_string(),
-            ),
-        }
+        (
+            match lang {
+                Lang::Zh => "就绪 (事件唤醒)",
+                Lang::En => "Ready (event trigger)",
+            },
+            match lang {
+                Lang::Zh => "WatchPaths 零常驻",
+                Lang::En => "WatchPaths zero-memory",
+            },
+            "0.00 MB".to_string(),
+            "0.0%".to_string(),
+        )
     };
 
-    let watch_dirs = default_watch_dirs()
-        .iter()
-        .map(|d| d.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let size_text = std::env::current_exe()
+    let power = match lang {
+        Lang::Zh => "< 0.05 W",
+        Lang::En => "< 0.05 W",
+    };
+    let size = std::env::current_exe()
         .ok()
         .and_then(|p| fs::metadata(p).ok())
-        .map(|m| format!("{:.0} KB (LTO + Strip)", m.len() as f64 / 1024.0))
-        .unwrap_or_else(|| "-".to_string());
+        .map(|m| format!("{:.0} KB", m.len() as f64 / 1024.0))
+        .unwrap_or_else(|| "—".to_string());
 
-    let (label_service, label_mode, label_status, label_dirs, label_logs, label_perf, label_mem, label_cpu, label_power, label_size, label_guide, label_more) = match lang {
-        Lang::Zh => (
-            "系统服务状态 (Launchd Service)",
-            "运行模式",
-            "服务状态",
-            "监听路径",
-            "日志路径",
-            "系统性能与资源开销 (Performance)",
-            "常驻内存",
-            "CPU 占用",
-            "估算功耗",
-            "程序体积",
-            "💡 常用命令指南:",
-            "提示: 运行 `uq --help` 或 `uq -h` 可查看全部子命令与参数说明。\n",
-        ),
-        Lang::En => (
-            "Launchd Service Status",
-            "Mode",
-            "Status",
-            "Watch Dirs",
-            "Log Path",
-            "System Performance & Footprint",
-            "Memory Idle",
-            "CPU Usage",
-            "Est. Power",
-            "Binary Size",
-            "💡 Quick Command Guide:",
-            "Hint: Run `uq --help` or `uq -h` to see all available commands and options.\n",
-        ),
+    let home = home_dir().unwrap_or_default();
+    let dirs = default_watch_dirs()
+        .iter()
+        .map(|p| p.display().to_string().replace(&home.display().to_string(), "~"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let (dot, status_color) = if !service_installed || !is_active {
+        ("○", "yellow")
+    } else {
+        ("●", "green")
+    };
+    let status_text = format!("{} {}", dot, status);
+    let status_colored = match status_color {
+        "green" => status_text.green().bold().to_string(),
+        _ => status_text.yellow().bold().to_string(),
     };
 
-    println!("┌─ {} {}", label_service.bold(), "─".repeat(45));
-    println!("│  {:<12} {}", format!("{}:", label_mode), mode_text);
-    println!("│  {:<12} {}", format!("{}:", label_status), status_text);
-    println!("│  {:<12} {}", format!("{}:", label_dirs), watch_dirs.dimmed());
-    println!("│  {:<12} {}", format!("{}:", label_logs), LOG_PATH.dimmed());
-    println!("├─ {} {}", label_perf.bold(), "─".repeat(40));
-    println!("│  {:<12} {}", format!("{}:", label_mem), mem_text);
-    println!("│  {:<12} {}", format!("{}:", label_cpu), cpu_text);
-    println!("│  {:<12} {}", format!("{}:", label_power), power_text);
-    println!("│  {:<12} {}", format!("{}:", label_size), size_text.dimmed());
-    println!("└─────────────────────────────────────────────────────────────\n");
+    let (t_service, t_perf) = match lang {
+        Lang::Zh => ("服务", "资源开销"),
+        Lang::En => ("Service", "Footprint"),
+    };
+    let (l_status, l_mode, l_dirs, l_log, l_mem, l_power) = match lang {
+        Lang::Zh => ("状态", "模式", "监听", "日志", "内存", "功耗"),
+        Lang::En => ("State", "Mode", "Watch", "Log", "Memory", "Power"),
+    };
 
-    println!("{}", label_guide.bold());
-    match lang {
-        Lang::Zh => {
-            println!("  • 手动清理全部:  {}", "uq do".yellow());
-            println!("  • 解除应用隔离:  {}", "uq /Applications/SomeApp.app".yellow());
-            println!("  • 检查隔离属性:  {}", "uq check /Applications/SomeApp.app".yellow());
-            println!("  • 后台日志追踪:  {}", "uq log -f".yellow());
-            println!("  • 服务管理命令:  {}", "uq service [install|uninstall|status]".yellow());
-        }
-        Lang::En => {
-            println!("  • Manual sweep:      {}", "uq do".yellow());
-            println!("  • Strip quarantine:  {}", "uq /Applications/SomeApp.app".yellow());
-            println!("  • Check quarantine:  {}", "uq check /Applications/SomeApp.app".yellow());
-            println!("  • Live log stream:   {}", "uq log -f".yellow());
-            println!("  • Service manager:   {}", "uq service [install|uninstall|status]".yellow());
-        }
-    }
-    println!("\n{}", label_more.dimmed());
+    println!();
+    println!(
+        "  {} {}",
+        "⚡".yellow(),
+        format!("uq v{}", env!("CARGO_PKG_VERSION")).bold()
+    );
+    println!("  {}", match lang {
+        Lang::Zh => "极速 macOS 隔离属性自动解除与实时守护",
+        Lang::En => "Lightning-fast macOS quarantine remover & realtime watcher",
+    }.dimmed());
+    println!();
+    println!("{}", box_top(t_service, t_service.cyan().bold().to_string()));
+    println!("{}", box_row(l_status, &status_text, status_colored));
+    println!("{}", box_row(l_mode, mode, mode.dimmed().to_string()));
+    let dirs_cell = truncate_words(&dirs, 54);
+    println!("{}", box_row(l_dirs, &dirs_cell, dirs_cell.dimmed().to_string()));
+    println!("{}", box_row(l_log, LOG_PATH, LOG_PATH.dimmed().to_string()));
+    println!("{}", box_sep(t_perf, t_perf.cyan().bold().to_string()));
+    println!(
+        "{}",
+        box_row(
+            l_mem,
+            &format!("{}  ·  CPU {}", mem, cpu),
+            format!("{}  ·  CPU {}", mem, cpu).dimmed().to_string()
+        )
+    );
+    println!(
+        "{}",
+        box_row(
+            l_power,
+            &format!("{}  ·  {}", power, size),
+            format!("{}  ·  {}", power, size).dimmed().to_string()
+        )
+    );
+    println!("{}", box_bottom());
+    println!();
 }
 
 fn extract_cli_lang() -> Option<Lang> {
